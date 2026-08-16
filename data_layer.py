@@ -40,6 +40,39 @@ SHEET_ALIASES = {
 
 
 @st.cache_data(ttl="10m", show_spinner=False)
+def _detectar_formato_pct(file_like_or_path, hoja, col_nombre):
+    """
+    Lee el number_format REAL de cada celda de una columna con openpyxl
+    (pandas.read_excel no lo trae) -- devuelve una lista de bool, una por
+    fila de datos, True si la celda tiene formato de porcentaje ('%' en
+    el patrón de formato, ej. '0%', '0.00%').
+
+    Si algo falla (hoja no existe, columna no encontrada, archivo-like
+    ya consumido por una lectura anterior), devuelve una lista de puros
+    False -- el resto del pipeline sigue funcionando exactamente como
+    antes de este fix, solo sin el detalle nuevo.
+    """
+    try:
+        import openpyxl
+        wb = openpyxl.load_workbook(file_like_or_path, data_only=True)
+        if hoja not in wb.sheetnames:
+            hoja_real = next((s for s in wb.sheetnames if s.strip().upper() == hoja.upper()), None)
+            if not hoja_real:
+                return []
+            hoja = hoja_real
+        ws = wb[hoja]
+        headers = [c.value for c in ws[1]]
+        if col_nombre not in headers:
+            return []
+        col_idx = headers.index(col_nombre) + 1
+        return [
+            "%" in (ws.cell(row=r, column=col_idx).number_format or "")
+            for r in range(2, ws.max_row + 1)
+        ]
+    except Exception:
+        return []
+
+
 def load_cruce(file_like_or_path):
     """
     Carga el Excel de 5 hojas por NOMBRE (no por ancho -- el formato viejo
@@ -69,6 +102,33 @@ def load_cruce(file_like_or_path):
         )
     if "Brand ID" in checkout.columns:
         checkout["brand_key"] = checkout["Brand ID"].apply(_brand_key)
+    # BUG REAL ENCONTRADO (pedido explícito de Sabas: "el cierre me está
+    # mostrando $0"). pandas.read_excel() SOLO trae el valor numérico
+    # crudo de cada celda -- nunca su formato visual. La columna
+    # Presupuesto de Checkout mezcla dos tipos de dato en la misma
+    # columna sin ningún texto que los distinga:
+    #   - Montos en pesos: celda con formato "[$$]#,##0" -> 50000.0
+    #   - Porcentajes: celda con formato "0%" -> 0.1 (osea 10%, pero el
+    #     valor crudo que devuelve pandas es 0.1, IDÉNTICO a como se
+    #     vería 0.1 peso -- no hay forma de diferenciarlos mirando solo
+    #     el número). _parse_presupuesto_valor() buscaba el símbolo "%"
+    #     en el texto, pero ese símbolo nunca llega -- vive en el
+    #     FORMATO de la celda de Excel, no en el valor. Por eso $0.1
+    #     pesos ÷ 1450 (tasa USD) redondeaba a $0, silenciosamente,
+    #     para CADA fila que en realidad era un %.
+    # FIX: se abre el archivo una segunda vez con openpyxl (que sí puede
+    # leer number_format) SOLO para la columna Presupuesto, y se guarda
+    # el resultado en una columna nueva "_presupuesto_es_pct" -- el
+    # resto del pipeline pandas sigue igual, sin tener que reabrir el
+    # archivo en cada función que toque Presupuesto.
+    if "Presupuesto" in checkout.columns:
+        formatos_pct = _detectar_formato_pct(file_like_or_path, "CHECKOUT", "Presupuesto")
+        if len(formatos_pct) == len(checkout):
+            checkout["_presupuesto_es_pct"] = formatos_pct
+        else:
+            # Longitud no calza (raro, pero mejor no asignar mal que
+            # desalinear filas) -- se sigue igual que antes de este fix.
+            checkout["_presupuesto_es_pct"] = False
     # BUG REAL ENCONTRADO (agosto 2026, octavo ajuste): "Tipo de
     # Contratacion" en Checkout trae "Adquisicion " con un espacio en
     # blanco al final -- una comparación exacta contra "Adquisicion"
@@ -429,21 +489,32 @@ def funnel_niveles(df):
     los segmentos de su barra interna (nombre, n, %), y el subconjunto de
     marcas que le corresponde con su Status para la tabla lateral.
 
-    Cierre es terminal y SOLO se ve en su propia card al final del
-    funnel (pedido explícito de Sabas: "ese es precisamente el sentido
-    del funnel") -- no aparece como segmento ni en la barra de
-    Contactados ni en la de Pipeline. Para lograrlo sin romper la regla
-    de oro (la suma de segmentos de un nivel = el total de ese nivel):
-    a nivel de dato una marca cerrada sigue con N2="Pipeline" (así
-    Contactados = Pipeline + Rechazado sigue cuadrando con solo 2
-    segmentos), pero el bloque de Pipeline y su tabla se arman
-    filtrando por N3 (Caliente/Frío), que para una marca cerrada es
-    "Cierre" -- así queda afuera automáticamente, sin necesidad de un
-    tercer segmento visible en ningún lado salvo su propia card.
+    BUG REAL ENCONTRADO Y CORREGIDO (pedido explícito de Sabas: "no
+    coincide la cuenta del pipeline"). La versión anterior mostraba
+    "Pipeline 26" en la barra de Contactados, pero la card de Pipeline de
+    abajo mostraba total 12 -- un hueco de 14, EXACTO al número de
+    Cierre. Causa: a nivel de dato, una marca cerrada seguía con
+    N2="Pipeline" (decisión explícita de una vuelta anterior, para que
+    Cierre no apareciera como segmento en ningún lado más que su propia
+    card) -- pero el conteo de la barra usaba N2 (que SÍ incluye
+    cerrados) mientras el total de la card de Pipeline usaba N3 (que los
+    EXCLUYE). Dos filtros distintos para "lo mismo" = el hueco visible.
+    Con solo 2 cierres el hueco pasaba casi desapercibido; con 14 se
+    volvió imposible de no notar -- por eso apareció recién ahora, no es
+    que se haya roto de nuevo.
+
+    FIX: "Pipeline" en la barra de Contactados ahora se cuenta igual que
+    en la card de abajo (N3 en Caliente/Frío, sin cerrados), y se agrega
+    "Cerrado" como tercer segmento explícito de esa misma barra -- así
+    Contactados = Pipeline + Rechazado + Cerrado vuelve a sumar exacto
+    (regla de oro), y "Pipeline X" en la barra de arriba es SIEMPRE el
+    mismo número que el total de la card de Pipeline debajo, sin
+    excepción.
     """
     n_contactado = int((df["N1"] == "Contactado").sum())
     n_cierre = int((df["N3"] == "Cierre").sum())
     n_pipeline = int(df["N3"].isin(["Caliente", "Frío"]).sum())
+    n_rechazado = int((df["N2"] == "Rechazado").sum())
 
     def segs(pares):
         total = sum(n for _, n in pares) or 1
@@ -451,7 +522,7 @@ def funnel_niveles(df):
 
     base_tbl = df.assign(Status=df["N1"])
     cont_tbl = df[df["N1"] == "Contactado"].assign(
-        Status=lambda d: d["N2"].fillna("Pipeline"))
+        Status=lambda d: d["N3"].where(d["N3"] == "Cierre", d["N2"]).fillna("Pipeline"))
     pipe_tbl = df[df["N3"].isin(["Caliente", "Frío"])].assign(Status=df["N3"])
     cierre_tbl = df[df["N3"] == "Cierre"].assign(Status="Cerrado")
     # Inversión (Pipeline) y Cerrado (Cierre) se resuelven en la UI --
@@ -468,7 +539,7 @@ def funnel_niveles(df):
         {
             "key": "contactado", "titulo": "Contactados", "total": n_contactado,
             "sub": f"{(n_contactado / len(df) * 100) if len(df) else 0:.1f}% de la base",
-            "segmentos": segs([(l, int((df["N2"] == l).sum())) for l in FUNNEL_ORDEN_L2]),
+            "segmentos": segs([("Pipeline", n_pipeline), ("Rechazado", n_rechazado), ("Cerrado", n_cierre)]),
             "tabla": cont_tbl,
         },
         {
@@ -824,21 +895,36 @@ def cvr_por_brand_key(md_df, cvr_df):
     return {key: cvr_map.get(_norm_nombre(nombre)) for key, nombre in nombre_map.items()}
 
 
-def _parse_presupuesto_valor(valor_crudo):
-    """Devuelve (tipo, valor) del 'Presupuesto' de Checkout TAL CUAL viene
+def _parse_presupuesto_valor(valor_crudo, es_pct=False):
+    """
+    Devuelve (tipo, valor) del 'Presupuesto' de Checkout TAL CUAL viene
     -- pedido explícito de Sabas: "colocas el valor independiente que
     sea $ o %, no lo conviertas todo a porcentaje" (convertir a % del
     GMV daba números sin sentido en marcas de GMV chico -- ej. $40.000
-    de presupuesto sobre $10 de GMV daba "275.9%"). tipo="pct" si el
-    texto trae '%' (se usa tal cual); tipo="monto" si es un número (se
-    limpia el separador de miles, sin asumir ninguna moneda)."""
+    de presupuesto sobre $10 de GMV daba "275.9%").
+
+    BUG REAL ENCONTRADO (pedido explícito de Sabas: "el cierre me está
+    mostrando $0, ¿es real?"): antes esto decidía "pct" vs "monto"
+    buscando el símbolo "%" en el texto del valor. Pero pandas nunca
+    trae ese símbolo -- vive en el FORMATO VISUAL de la celda de Excel
+    ('0%'), no en el valor numérico crudo que devuelve read_excel(). Una
+    celda con 10% real y una con $0.10 de pesos llegan AMBAS como el
+    float 0.1, indistinguibles con el método viejo -- por eso $0.1
+    pesos ÷ 1450 (tasa USD) redondeaba a $0 para cada fila que en
+    realidad era un %.
+
+    `es_pct` ahora viene del formato REAL de la celda (ver
+    _detectar_formato_pct en load_cruce, leído con openpyxl) -- ya no se
+    adivina con texto.
+    """
     if pd.isna(valor_crudo):
         return None
     s = str(valor_crudo).strip()
     if not s:
         return None
-    if "%" in s:
-        return ("pct", _parse_pct(s))
+    if es_pct or "%" in s:
+        valor = float(valor_crudo) * 100 if not isinstance(valor_crudo, str) else _parse_pct(s)
+        return ("pct", valor)
     return ("monto", _parse_money(s))
 
 
@@ -853,9 +939,11 @@ def presupuesto_valor_por_brand(checkout_df, farmer_email):
     sub = chk[chk["FARMER"] == farmer_email]
     if "Fecha" in sub.columns:
         sub = sub.sort_values("Fecha")
+    tiene_flag = "_presupuesto_es_pct" in sub.columns
     out = {}
     for _, row in sub.iterrows():
-        val = _parse_presupuesto_valor(row.get("Presupuesto"))
+        es_pct = bool(row.get("_presupuesto_es_pct", False)) if tiene_flag else False
+        val = _parse_presupuesto_valor(row.get("Presupuesto"), es_pct=es_pct)
         if val is not None:
             out[row["brand_key"]] = val
     return out
