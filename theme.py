@@ -231,9 +231,30 @@ def build_css():
         grid-column: 1 !important;
         grid-row: 1 !important;
         margin: 0 !important; padding: 0 !important; min-width: 0 !important;
+        /* Probado con navegador headless (Playwright): Streamlit le pone
+           a cada wrapper de widget un `height` inline en px (para su
+           animación de entrada), y eso desactiva el `stretch` por
+           defecto del grid en ESE hijo -- por eso antes el botón se
+           quedaba con su alto chico de siempre (~40px) en vez de estirarse
+           a la altura real de la card. Un `height:100% !important` en
+           hoja de estilos SÍ le gana a un inline style sin !important. */
+        height: 100% !important;
+    }}
+    /* Streamlit mete, dentro del markdown, un div interno con
+       margin-bottom NEGATIVO (su propio mecanismo de espaciado entre
+       widgets). Ese margen negativo deja que la card visual "se salga"
+       por abajo del alto que el grid calculó para toda la fila, sin
+       inflar el alto del contenedor -- esos pixeles de sobra (~16px)
+       eran justo los que el botón, ya estirado al 100% del contenedor,
+       no llegaba a cubrir (el motivo real de "la manito solo carga en
+       ciertos puntos"). Se anula con :has() para no depender de la
+       profundidad exacta ni de las clases con hash que genera Streamlit. */
+    div[class*="st-key-fncard_"] .stMarkdown div:has(> .fn-card) {{
+        margin-bottom: 0 !important;
     }}
     div[class*="st-key-fncard_"] .stButton {{
         z-index: 5 !important;
+        height: 100% !important;
     }}
     div[class*="st-key-fncard_"] .stButton button {{
         width: 100% !important; height: 100% !important;
