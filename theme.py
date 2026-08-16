@@ -195,18 +195,37 @@ def build_css():
     .fn-arrow {{ text-align: center; color: {C['muted']}; font-size: 17px; line-height: 1.4; margin: 2px 0; }}
     .fn-note {{ text-align: center; font-size: 11px; color: {C['muted']}; margin: 2px 0 4px 0; line-height: 1.45; }}
 
-    /* Botón invisible que cubre la card -- así el clic/hover es sobre el
-       BLOQUE completo, no sobre la barra interna (pedido explícito). */
-    .fn-hit .stButton {{ margin-top: -104px !important; }}
-    .fn-hit .stButton button {{
-        background: transparent !important; border: none !important;
-        color: transparent !important; height: 104px !important;
-        box-shadow: none !important;
+    /* Botón invisible que cubre la card entera -- así el clic/hover es
+       sobre el BLOQUE completo, no sobre la barra interna (pedido
+       explícito). El contenedor de cada nivel (.st-key-fncard_*) es el
+       ancestro real tanto de la card como del botón, así que position
+       absolute + inset:0 lo estira exacto sobre la card sin importar su
+       alto real -- no hay valores fijos en px que puedan quedar cortos
+       o largos y dejar un resto de caja visible. */
+    div[class*="st-key-fncard_"] {{
+        position: relative !important;
     }}
-    .fn-hit .stButton button:hover {{ background: rgba(103,79,211,0.05) !important; }}
-    .fn-hit .stButton button:active {{ background: rgba(103,79,211,0.10) !important; }}
-    .fn-hit-tall .stButton {{ margin-top: -76px !important; }}
-    .fn-hit-tall .stButton button {{ height: 76px !important; }}
+    div[class*="st-key-fncard_"] .stButton {{
+        position: absolute !important; inset: 0 !important;
+        margin: 0 !important; z-index: 5 !important;
+    }}
+    div[class*="st-key-fncard_"] .stButton button {{
+        width: 100% !important; height: 100% !important;
+        background: transparent !important; border: none !important;
+        color: transparent !important; box-shadow: none !important;
+        border-radius: 14px !important; padding: 0 !important;
+    }}
+    div[class*="st-key-fncard_"] .stButton button p {{ color: transparent !important; }}
+    /* La "luz" de hover/active se ve en la CARD, no en el botón, aunque
+       el botón sea el que técnicamente recibe el evento (:has vive en
+       navegadores modernos, ya se usa en otra parte del CSS). */
+    div[class*="st-key-fncard_"]:has(.stButton button:hover) .fn-card {{
+        border-color: {C['violeta_claro']};
+        box-shadow: 0 4px 14px rgba(103,79,211,0.14);
+    }}
+    div[class*="st-key-fncard_"]:has(.stButton button:active) .fn-card {{
+        background: {C['panel_2']};
+    }}
 
     /* ── TABLA lateral: alto fijo, scroll SOLO vertical ── */
     .tbl-box {{

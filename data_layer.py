@@ -323,7 +323,7 @@ def dias_habiles_entre(desde, hasta):
 # otra lectura dejaría marcas sin bucket y rompería la regla de oro.
 
 FUNNEL_ORDEN_L1 = ["Contactado", "No Contactado", "Sin Gestionar"]
-FUNNEL_ORDEN_L2 = ["Pipeline", "Rechazado"]
+FUNNEL_ORDEN_L2 = ["Pipeline", "Rechazado", "Cierre"]
 FUNNEL_ORDEN_L3 = ["Caliente", "Frío"]
 
 COLS_TRIAGE = ["Brand ID", "Brand Name", "GMV", "Status"]
@@ -336,7 +336,7 @@ def _clasificar_marca(key, nombre, gmv, marca_prod, es_cierre, col_señal, hoy):
     """Devuelve (nivel1, nivel2, nivel3) para una marca. nivel2/nivel3
     quedan en None si la marca no llega a ese nivel."""
     if es_cierre:
-        return "Contactado", "Pipeline", "Cierre"
+        return "Contactado", "Cierre", None
 
     if marca_prod.empty:
         return "Sin Gestionar", None, None
@@ -380,7 +380,16 @@ def funnel_niveles(df):
     """Arma los 4 niveles listos para pintar. Cada nivel trae su total,
     los segmentos de su barra interna (nombre, n, %), y el subconjunto de
     marcas que le corresponde con su Status para la tabla lateral."""
-    n_cierre = int((df["N3"] == "Cierre").sum())
+    # BUG REAL ENCONTRADO (pedido explícito de Sabas): antes una marca en
+    # Cierre quedaba con N2="Pipeline" (para que sumara bien en el nivel
+    # Contactados), pero eso hacía que el bloque de Pipeline la SIGUIERA
+    # contando dentro de su propia barra (Caliente + Frío + Cierre) --
+    # visualmente el cierre aparecía duplicado, una vez en su propia
+    # card y otra vez metido dentro de Pipeline. Ahora Cierre es su
+    # propio valor de N2 (no "Pipeline"), así que el bloque de Pipeline
+    # automáticamente deja de contarlo, y Contactados sigue sumando bien
+    # con 3 segmentos en vez de 2 (Pipeline + Rechazado + Cierre).
+    n_cierre = int((df["N2"] == "Cierre").sum())
     n_contactado = int((df["N1"] == "Contactado").sum())
     n_pipeline = int((df["N2"] == "Pipeline").sum())
 
@@ -393,7 +402,7 @@ def funnel_niveles(df):
         Status=lambda d: d["N2"].fillna("Pipeline"))
     pipe_tbl = df[df["N2"] == "Pipeline"].assign(
         Status=lambda d: d["N3"].fillna("Pipeline"))
-    cierre_tbl = df[df["N3"] == "Cierre"].assign(Status="Cerrado")
+    cierre_tbl = df[df["N2"] == "Cierre"].assign(Status="Cerrado")
 
     return [
         {
@@ -414,7 +423,6 @@ def funnel_niveles(df):
             "segmentos": segs([
                 ("Caliente", int((df["N3"] == "Caliente").sum())),
                 ("Frío", int((df["N3"] == "Frío").sum())),
-                ("Cierre", n_cierre),
             ]),
             "tabla": pipe_tbl,
         },

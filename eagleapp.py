@@ -96,21 +96,28 @@ def _barra_html(segmentos):
 
 def card_nivel(nivel, margen, seleccionado, key):
     """Card del funnel + botón invisible que la cubre entera -- así el
-    clic y el hover son sobre el BLOQUE, no sobre la barra interna."""
+    clic y el hover son sobre el BLOQUE, no sobre la barra interna.
+
+    El botón vive DENTRO del mismo st.container que la card (no repartido
+    en llamadas sueltas de st.markdown), y se posiciona con
+    `position:absolute; inset:0` sobre ese contenedor -- así cubre la
+    card completa sea cual sea su alto real (con barra, sin barra, con
+    más o menos segmentos), sin necesidad de adivinar una altura fija en
+    píxeles. Antes se usaba un margin-top negativo calculado a mano, que
+    dejaba un resto de caja visible cuando la card medía distinto de lo
+    calculado."""
     barra = _barra_html(nivel["segmentos"])
     sel_cls = " is-sel" if seleccionado else ""
-    alto_cls = "fn-hit" if barra else "fn-hit-tall"
-    st.markdown(
-        f'<div style="margin:0 {margen};">'
-        f'<div class="fn-card{sel_cls}">'
-        f'<div class="fn-title">{nivel["titulo"]}</div>'
-        f'<div><span class="fn-total">{nivel["total"]}</span>'
-        f'<span class="fn-sub">{nivel["sub"]}</span></div>'
-        f"{barra}</div></div>",
-        unsafe_allow_html=True,
-    )
-    with st.container(key=f"hit_{key}"):
-        st.markdown(f'<div class="{alto_cls}">', unsafe_allow_html=True)
+    with st.container(key=f"fncard_{key}"):
+        st.markdown(f'<div style="margin:0 {margen};">', unsafe_allow_html=True)
+        st.markdown(
+            f'<div class="fn-card{sel_cls}">'
+            f'<div class="fn-title">{nivel["titulo"]}</div>'
+            f'<div><span class="fn-total">{nivel["total"]}</span>'
+            f'<span class="fn-sub">{nivel["sub"]}</span></div>'
+            f"{barra}</div>",
+            unsafe_allow_html=True,
+        )
         clic = st.button(" ", key=f"btn_{key}", use_container_width=True)
         st.markdown("</div>", unsafe_allow_html=True)
     return clic
