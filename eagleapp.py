@@ -17,7 +17,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 import data_layer as dl
-from theme import COLORS, build_css, favicon, logo_mark
+from theme import COLORS, build_css, favicon, logo_img
 
 st.set_page_config(page_title="Eagle", page_icon=favicon(), layout="wide", initial_sidebar_state="expanded")
 st.markdown(build_css(), unsafe_allow_html=True)
@@ -45,7 +45,7 @@ def alert(text, kind="warn"):
 
 
 def funnel_chart(steps, values, colors=None):
-    colors = colors or [COLORS["gold"]] * len(steps)
+    colors = colors or [COLORS["red"]] * len(steps)
     fig = go.Figure(go.Funnel(
         y=steps, x=values,
         textinfo="value+percent initial",
@@ -80,7 +80,7 @@ def donut_chart(labels, values, colors):
 # ─────────────────────────────────────────────────────────────
 
 with st.sidebar:
-    st.markdown(logo_mark(44), unsafe_allow_html=True)
+    st.markdown(logo_img(190), unsafe_allow_html=True)
     st.markdown(
         f'<div style="font-size:11.5px;color:{COLORS["muted"]};margin:6px 0 18px;">'
         "Vista de altura sobre tu funnel propio</div>",
@@ -185,7 +185,7 @@ elif section == "🎯 Los 3 Funnels":
             funnel_chart(
                 ["Llamadas Never Ads", "Marcas gestionadas", "Cerradas"],
                 [ads["llamadas"], ads["marcas"], ads["cerradas_marcas"]],
-                colors=[COLORS["steel"], COLORS["gold"], COLORS["success"]],
+                colors=[COLORS["azul"], COLORS["red"], COLORS["verde"]],
             )
         with colm:
             card("Ciclo mediana", f'{ads["ciclo_mediana_dias"]:.0f} días' if ads["ciclo_mediana_dias"] is not None else "s/d",
@@ -204,7 +204,7 @@ elif section == "🎯 Los 3 Funnels":
             funnel_chart(
                 ["Llamadas ofrecidas", "Marcas ofrecidas", "Aceptadas"],
                 [md["llamadas"], md["marcas"], md["aceptadas_marcas"]],
-                colors=[COLORS["steel"], COLORS["gold"], COLORS["success"]],
+                colors=[COLORS["azul"], COLORS["red"], COLORS["verde"]],
             )
         with colm:
             card("Tasa de aceptación", f'{md["tasa_aceptacion"]:.1f}%', f'{md["aceptadas_llamadas"]} de {md["llamadas"]} llamadas', accent=True)
@@ -221,9 +221,9 @@ elif section == "🎯 Los 3 Funnels":
         colf, colm = st.columns([1, 1])
         with colf:
             cats = churn["conteo_por_categoria"]
-            cat_colors = {"Cerrada permanente": COLORS["danger"], "Reactivación programada": COLORS["info"], "Salvada en la llamada": COLORS["success"]}
+            cat_colors = {"Cerrada permanente": COLORS["granate"], "Reactivación programada": COLORS["azul"], "Salvada en la llamada": COLORS["verde"]}
             if cats:
-                donut_chart(list(cats.keys()), list(cats.values()), [cat_colors.get(k, COLORS["gray"]) for k in cats.keys()])
+                donut_chart(list(cats.keys()), list(cats.values()), [cat_colors.get(k, COLORS["gris"]) for k in cats.keys()])
         with colm:
             card("Retención", f'{churn["tasa_retencion"]:.0f}%', f'{churn["retenidas"]} de {churn["marcas"]} marcas retenidas', accent=True)
             card("Gestiones en la ventana", str(churn["gestiones"]), f'sobre {churn["marcas"]} marcas únicas')
