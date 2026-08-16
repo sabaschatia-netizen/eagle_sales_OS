@@ -76,48 +76,118 @@ def donut_chart(labels, values, colors):
 
 
 # ─────────────────────────────────────────────────────────────
-# SIDEBAR — carga de datos
+# HEADER (área principal, misma estructura que Wingman)
 # ─────────────────────────────────────────────────────────────
 
-with st.sidebar:
-    st.markdown(logo_img(190), unsafe_allow_html=True)
+def header(title, subtitle):
     st.markdown(
-        f'<div style="font-size:11.5px;color:{COLORS["muted"]};margin:6px 0 18px;">'
-        "Vista de altura sobre tu funnel propio</div>",
+        f'<div class="app-header">'
+        f'<div class="header-left">'
+        f'<div class="header-title">{title}</div>'
+        f'<div class="header-subtitle">{subtitle}</div>'
+        f"</div>"
+        f'<div class="header-logo-right">{logo_img(48)}</div>'
+        f"</div>",
         unsafe_allow_html=True,
     )
 
-    up = st.file_uploader("Cruce Productivity + Checkout (.xlsx)", type=["xlsx"])
-    usando_ejemplo = False
-    if up is not None:
-        productivity, checkout = dl.load_cruce(up)
-    elif os.path.exists(EJEMPLO_PATH):
-        productivity, checkout = dl.load_cruce(EJEMPLO_PATH)
-        usando_ejemplo = True
-    else:
-        st.info("Subí tu export para empezar.")
-        st.stop()
 
-    if usando_ejemplo:
-        st.caption("📎 Usando el archivo de ejemplo — subí el tuyo para ver tus números reales.")
+# ─────────────────────────────────────────────────────────────
+# SIDEBAR — misma postura que Wingman: columna fija (no st.sidebar
+# nativo), logo arriba, session pill, nav en botones apilados con
+# resaltado del activo, y un ancla al final (acá: "Reiniciar", ya que
+# Eagle no tiene login/logout como Wingman -- no hay sesión que cerrar,
+# pero sí tiene sentido limpiar el archivo cargado y arrancar de cero).
+# ─────────────────────────────────────────────────────────────
 
-    farmers = dl.farmers_disponibles(productivity)
-    farmer = st.selectbox("Farmer", farmers, index=0) if farmers else None
-    if not farmer:
-        st.error("No encontré la columna Farmer en el archivo.")
-        st.stop()
+col_sidebar, col_main = st.columns([1, 5.2], gap="small")
 
-    if "Date" in productivity.columns:
-        fmin, fmax = productivity["Date"].min(), productivity["Date"].max()
-        if pd.notna(fmin) and pd.notna(fmax):
-            st.caption(f"Ventana: {fmin.date()} → {fmax.date()}")
+with col_sidebar:
+    with st.container(key="eagle-sidebar"):
+        st.markdown(
+            f'<div style="display:flex;align-items:center;justify-content:center;'
+            f'width:100%;padding:10px 2px 20px 2px;">{logo_img(190)}</div>',
+            unsafe_allow_html=True,
+        )
 
-    st.markdown("---")
-    section = st.radio(
-        "Sección",
-        ["🏠 Resumen", "🎯 Los 3 Funnels", "📡 Radar Post-Llamada", "⚖️ Mezcla de Palancas"],
-        label_visibility="collapsed",
-    )
+        up = st.file_uploader("Cruce Productivity + Checkout (.xlsx)", type=["xlsx"], label_visibility="collapsed")
+        usando_ejemplo = False
+        if up is not None:
+            productivity, checkout = dl.load_cruce(up)
+        elif os.path.exists(EJEMPLO_PATH):
+            productivity, checkout = dl.load_cruce(EJEMPLO_PATH)
+            usando_ejemplo = True
+        else:
+            st.info("Subí tu export para empezar.")
+            st.stop()
+
+        farmers = dl.farmers_disponibles(productivity)
+        farmer = st.selectbox("Farmer", farmers, index=0, label_visibility="collapsed") if farmers else None
+        if not farmer:
+            st.error("No encontré la columna Farmer en el archivo.")
+            st.stop()
+
+        st.markdown(
+            f'<div class="session-pill">'
+            f'<div class="session-avatar">{dl.farmer_initials(farmer)}</div>'
+            f'<div class="session-text">'
+            f'<div class="session-name">{dl.farmer_display(farmer)}</div>'
+            f'<div class="session-role">Farmer</div>'
+            f"</div></div>",
+            unsafe_allow_html=True,
+        )
+
+        SECCIONES = [
+            ("resumen", "🏠 Resumen"),
+            ("funnels", "🎯 Los 3 Funnels"),
+            ("radar", "📡 Radar Post-Llamada"),
+            ("mezcla", "⚖️ Mezcla de Palancas"),
+        ]
+        st.session_state.setdefault("eagle_section", "resumen")
+        for sec_key, sec_label in SECCIONES:
+            if st.button(sec_label, key=f"nav_{sec_key}", use_container_width=True):
+                st.session_state["eagle_section"] = sec_key
+                st.rerun()
+
+        # Resaltar el botón activo -- mismo mecanismo que Wingman: CSS
+        # inyectado apuntando al key exacto del botón activo, porque
+        # st.session_state cambia en cada rerun y no puede resolverse con
+        # CSS estático.
+        active_key = f"nav_{st.session_state['eagle_section']}"
+        st.markdown(
+            f"""<style>
+            .st-key-{active_key} .stButton button,
+            .st-key-{active_key} .stButton button * {{
+                background: {COLORS["white"]} !important;
+                color: {COLORS["red"]} !important;
+                border-color: {COLORS["white"]} !important;
+            }}
+            </style>""",
+            unsafe_allow_html=True,
+        )
+
+        if usando_ejemplo:
+            st.caption("📎 Usando el archivo de ejemplo.")
+        if "Date" in productivity.columns:
+            fmin, fmax = productivity["Date"].min(), productivity["Date"].max()
+            if pd.notna(fmin) and pd.notna(fmax):
+                st.caption(f"Ventana: {fmin.date()} → {fmax.date()}")
+
+        st.markdown('<div class="logout-anchor">', unsafe_allow_html=True)
+        if st.button("↺ Reiniciar", use_container_width=True):
+            for k in list(st.session_state.keys()):
+                st.session_state.pop(k, None)
+            st.rerun()
+        st.markdown("</div>", unsafe_allow_html=True)
+
+col_main.__enter__()
+
+section = {
+    "resumen": "🏠 Resumen", "funnels": "🎯 Los 3 Funnels",
+    "radar": "📡 Radar Post-Llamada", "mezcla": "⚖️ Mezcla de Palancas",
+}[st.session_state["eagle_section"]]
+
+header(dl.farmer_display(farmer), section)
 
 
 # ─────────────────────────────────────────────────────────────

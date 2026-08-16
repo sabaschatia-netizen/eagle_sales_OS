@@ -79,6 +79,26 @@ def farmers_disponibles(productivity_df):
     return sorted(productivity_df["Farmer"].dropna().unique().tolist())
 
 
+def farmer_display(email):
+    """'sabas.ramirez@rappi.com' -> 'Sabas Ramirez' -- mismo criterio que
+    usa Wingman para mostrar el nombre en la session pill."""
+    if not email or "@" not in str(email):
+        return str(email)
+    local = str(email).split("@")[0]
+    return " ".join(p.capitalize() for p in local.split("."))
+
+
+def farmer_initials(email):
+    """'sabas.ramirez@rappi.com' -> 'SR' -- para el avatar de la session pill."""
+    name = farmer_display(email)
+    partes = name.split()
+    if not partes:
+        return "?"
+    if len(partes) == 1:
+        return partes[0][:2].upper()
+    return (partes[0][0] + partes[1][0]).upper()
+
+
 # ─────────────────────────────────────────────────────────────
 # FUNNEL 1 — ADS (NEVER ADS)
 # ─────────────────────────────────────────────────────────────
@@ -312,11 +332,11 @@ def mezcla_balance(ads_meta, ads_logrado, md_meta, md_logrado, churn_meta, churn
 # ─────────────────────────────────────────────────────────────
 
 ESTADOS = {
-    "Cerrado": {"dias_seguimiento": None, "color": "#3FB88A"},
-    "Objeción con argumento": {"dias_seguimiento": 4, "color": "#E3A008"},
-    "Timing / no es el momento": {"dias_seguimiento": 12, "color": "#4A90C2"},
-    "No contactado": {"dias_seguimiento": 1.5, "color": "#B24C4C"},
-    "Cierre total": {"dias_seguimiento": 30, "color": "#7A7F8A"},
+    "Cerrado": {"dias_seguimiento": None, "color": "#50B833"},               # verde (marca)
+    "Objeción con argumento": {"dias_seguimiento": 4, "color": "#86B3D8"},   # celeste (marca)
+    "Timing / no es el momento": {"dias_seguimiento": 12, "color": "#1E6EAF"},  # azul (marca)
+    "No contactado": {"dias_seguimiento": 1.5, "color": "#A2060A"},         # granate (marca)
+    "Cierre total": {"dias_seguimiento": 30, "color": "#8B8F97"},           # gris neutro — no viene en la franja del logo
 }
 
 TRACKER_COLUMNS = ["Marca", "Code", "Estado", "Fecha contacto", "Próximo contacto", "Notas", "Canal sugerido"]

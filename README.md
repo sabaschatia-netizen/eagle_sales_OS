@@ -5,6 +5,26 @@ mide a vos: cuántas llamadas se convierten en marcas trabajadas, cuáles
 cierran, cuánto tarda el ciclo, y qué tan balanceado está tu foco entre
 Ads (palanca primaria), Markdown y Churn.
 
+## Diseño (segundo rebrand — logo real)
+
+Paleta extraída por muestreo de píxeles del logo real
+(`assets/eagle_logo.png`), no a ojo — reemplaza la paleta oro/slate
+nocturno del primer intento.
+
+- **Logo**: PNG embebido en base64 en `logo_asset.py` (mismo patrón que
+  usa Wingman con el suyo) — el repo funciona apenas se clona, sin
+  depender de un archivo externo.
+- **Paleta**: rojo de marca `#E21D22` (sidebar, headers, acento), fondo
+  claro `#FAFAF9` para el contenido — un fondo oscuro sostenido cansa la
+  vista en una app de datos que se mira todo el día.
+- **Paleta de estados = la franja del propio logo**, no colores
+  inventados aparte: granate `#A2060A` (No contactado), celeste
+  `#86B3D8` (Objeción con argumento), azul `#1E6EAF` (Timing), verde
+  `#50B833` (Cerrado). Cierre total usa un gris neutro `#8B8F97` — ese
+  estado no tiene color en la franja del logo.
+- **Tipografía**: Plus Jakarta Sans (display) + Inter (body) + JetBrains
+  Mono (datos).
+
 ## Correr local
 
 ```bash
