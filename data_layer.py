@@ -94,6 +94,29 @@ def load_cruce(file_like_or_path):
     return hojas
 
 
+def _asegurar_brand_key(prod):
+    """
+    Devuelve `prod` con columna `brand_key` garantizada.
+
+    BUG REAL ENCONTRADO (agosto 2026): `funnel_ads`, `funnel_md` y
+    `funnel_churn` recalculaban `brand_key` leyendo `prod["Code"]`
+    directo, sin la misma protección que `load_cruce` sí aplica (crear
+    la columna solo `if "Code" in productivity.columns`). Si el Excel
+    real no trae esa columna con ese nombre exacto, esto tiraba
+    `KeyError: 'Code'` -- como pasó en el deploy. Ahora se reutiliza el
+    `brand_key` que `load_cruce` ya calculó de forma segura y, si por
+    algún motivo no llegó (hoja vacía, columna faltante), se cae a
+    vacío en vez de reventar la app.
+    """
+    if "brand_key" in prod.columns:
+        return prod
+    if "Code" in prod.columns:
+        prod["brand_key"] = prod["Code"].apply(_brand_key)
+    else:
+        prod["brand_key"] = ""
+    return prod
+
+
 def _brand_key(value):
     """Normaliza 'AR104267', '104267', 104267.0, '104308 - Granados Bar Ar'
     -> '104267'/'104308' (solo el número, sin importar prefijo de país,
@@ -407,7 +430,7 @@ def funnel_ads(ads_df, productivity_df, checkout_df, farmer_email, gmv_map=None,
     hoy = pd.Timestamp(hoy) if hoy is not None else pd.Timestamp.now().normalize()
     gmv_map = gmv_map or {}
     prod = productivity_df[productivity_df["Farmer"] == farmer_email].copy()
-    prod["brand_key"] = prod["Code"].apply(_brand_key)
+    prod = _asegurar_brand_key(prod)
 
     d = ads_df.copy()
     if d.empty or "BRAND" not in d.columns:
@@ -430,7 +453,7 @@ def funnel_md(md_df, productivity_df, checkout_df, farmer_email, gmv_map=None, u
     hoy = pd.Timestamp(hoy) if hoy is not None else pd.Timestamp.now().normalize()
     gmv_map = gmv_map or {}
     prod = productivity_df[productivity_df["Farmer"] == farmer_email].copy()
-    prod["brand_key"] = prod["Code"].apply(_brand_key)
+    prod = _asegurar_brand_key(prod)
 
     d = md_df.copy()
     if d.empty or "BRAND ID" not in d.columns:
@@ -475,7 +498,7 @@ def funnel_churn(churn_df, productivity_df, farmer_email, gmv_map=None):
     # restringir el tipo de fila -- así que se mira TODA la actividad de
     # la marca. Con el filtro viejo, el nivel 2 daba 0 siempre.
     prod = productivity_df[productivity_df["Farmer"] == farmer_email].copy()
-    prod["brand_key"] = prod["Code"].apply(_brand_key)
+    prod = _asegurar_brand_key(prod)
 
     filas = []
     for _, row in ch.iterrows():
