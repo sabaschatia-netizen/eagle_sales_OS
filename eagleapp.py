@@ -47,43 +47,102 @@ def alert(text, kind="warn"):
     st.markdown(f'<div class="eagle-alert {kind}">{text}</div>', unsafe_allow_html=True)
 
 
-def barra_triage(df_triage, orden):
-    """Barra horizontal apilada de una sola fila -- muestra la
-    distribución REAL de la cartera elegible en este momento entre los
-    estados de `orden`, no un flujo secuencial. Cada segmento usa el
-    color de marca que le corresponde (ver dl.TRIAGE_COLORES)."""
-    counts = df_triage["Estado"].value_counts() if len(df_triage) else pd.Series(dtype=int)
-    fig = go.Figure()
-    for estado in orden:
-        n = int(counts.get(estado, 0))
-        color = COLORS[dl.TRIAGE_COLORES.get(estado, "gris")]
-        fig.add_trace(go.Bar(
-            y=[""], x=[n], name=f"{estado} · {n}", orientation="h",
-            marker_color=color,
-            text=str(n) if n > 0 else "", textposition="inside",
-            insidetextfont={"color": COLORS["white"], "size": 13},
-        ))
+def pie_triage(df_triage, orden, key):
+    """
+    Pie chart con selección real por clic (st.plotly_chart on_select) --
+    pedido explícito de Sabas: "seleccionar cada etapa del pastel".
+
+    NOTA DE HONESTIDAD TÉCNICA: no tengo forma de simular un clic de
+    mouse sobre un gráfico Plotly desde este entorno para verificar el
+    formato EXACTO del evento devuelto -- por eso se lee de forma
+    defensiva (probando varias claves candidatas) y, si el clic no
+    devuelve nada usable, la app no se rompe: cae al selector de abajo,
+    que si está 100% probado. Confirmá vos mismo cuál de los dos termina
+    respondiendo mejor una vez desplegado.
+
+    Devuelve el estado clickeado (o None si no hubo clic todavía).
+    """
+    counts = df_triage["Status"].value_counts() if len(df_triage) else pd.Series(dtype=int)
+    labels = [e for e in orden if counts.get(e, 0) > 0] or orden
+    values = [int(counts.get(e, 0)) for e in labels]
+    colors = [COLORS[dl.TRIAGE_COLORES.get(e, "gris")] for e in labels]
+
+    fig = go.Figure(go.Pie(
+        labels=labels, values=values, customdata=labels,
+        marker=dict(colors=colors, line=dict(color=COLORS["panel"], width=2)),
+        textinfo="label+value", textfont={"color": COLORS["white"], "size": 12.5},
+        hole=0.42,
+    ))
     fig.update_layout(
-        barmode="stack", height=90,
-        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-        margin=dict(l=6, r=6, t=6, b=6),
-        showlegend=True, legend=dict(orientation="h", y=-0.35, font={"size": 11}),
-        xaxis=dict(visible=False), yaxis=dict(visible=False),
+        paper_bgcolor="rgba(0,0,0,0)",
+        margin=dict(l=6, r=6, t=6, b=6), height=300,
+        showlegend=False,
     )
-    st.plotly_chart(fig, use_container_width=True)
+    event = st.plotly_chart(fig, use_container_width=True, on_select="rerun", key=key)
+
+    clickeado = None
+    try:
+        puntos = event.selection.points if event and event.selection else []
+        if puntos:
+            p = puntos[0]
+            clickeado = p.get("customdata") or p.get("label")
+            if isinstance(clickeado, list):
+                clickeado = clickeado[0] if clickeado else None
+    except (AttributeError, KeyError, IndexError):
+        clickeado = None
+    return clickeado
 
 
-def tabla_bloque(df_triage, estado, columnas, titulo=None, abierto=False):
-    """Un expander con la lista de marcas de un solo estado -- esto es
-    lo accionable: "siempre hará seguimiento solo de las marcas del
-    bloque superior", no la barra en sí."""
-    sub = df_triage[df_triage["Estado"] == estado][columnas]
-    titulo = titulo or estado
-    with st.expander(f"{titulo} ({len(sub)})", expanded=abierto):
-        if len(sub):
-            st.dataframe(sub, use_container_width=True, hide_index=True)
-        else:
-            st.caption("Ninguna marca en este estado.")
+def tabla_pills(df_triage, estado, columnas=("Brand ID", "Brand Name", "GMV", "Status")):
+    """
+    Tabla HTML con pills de color -- pedido explícito de Sabas: GMV
+    siempre en pill verde, Status con el color de TRIAGE_COLORES según
+    el estado real de cada fila (no todas del mismo color, aunque estén
+    filtradas por un solo `estado` -- en la práctica todas van a
+    compartir color acá porque ya vienen filtradas, pero el render lee
+    el color de cada fila, no uno fijo, por si en el futuro se muestra
+    una tabla mixta). Ya viene ordenada de mayor a menor GMV desde
+    data_layer -- acá no se reordena.
+    """
+    sub = df_triage[df_triage["Status"] == estado]
+    if not len(sub):
+        st.caption("Ninguna marca en este estado.")
+        return
+
+    filas_html = []
+    for _, r in sub.iterrows():
+        color_estado = COLORS[dl.TRIAGE_COLORES.get(r["Status"], "gris")]
+        gmv_fmt = f'${r["GMV"]:,.0f}'.replace(",", ".")
+        celdas = []
+        for c in columnas:
+            if c == "GMV":
+                celdas.append(f'<td><span class="eagle-badge" style="background:{COLORS["verde"]};color:#fff;">{gmv_fmt}</span></td>')
+            elif c == "Status":
+                celdas.append(f'<td><span class="eagle-badge" style="background:{color_estado};color:#fff;">{r["Status"]}</span></td>')
+            else:
+                celdas.append(f"<td>{r[c]}</td>")
+        filas_html.append(f"<tr>{''.join(celdas)}</tr>")
+
+    header_html = "".join(f"<th>{c}</th>" for c in columnas)
+    st.markdown(
+        f'<div style="overflow-x:auto;"><table class="eagle-pill-table">'
+        f"<thead><tr>{header_html}</tr></thead><tbody>{''.join(filas_html)}</tbody></table></div>",
+        unsafe_allow_html=True,
+    )
+
+
+def bloque_triage(df_triage, orden, key_prefix):
+    """Arma el pie + el selector de respaldo + la tabla de pills para una
+    palanca completa (Ads, MD, o Churn)."""
+    clickeado = pie_triage(df_triage, orden, key=f"pie_{key_prefix}")
+
+    disponibles = [e for e in orden if (df_triage["Status"] == e).sum() > 0] or orden
+    default_idx = disponibles.index(clickeado) if clickeado in disponibles else 0
+    estado_sel = st.selectbox(
+        "Ver marcas de:", disponibles, index=default_idx, key=f"sel_{key_prefix}",
+    )
+    st.caption(f'{(df_triage["Status"] == estado_sel).sum()} marca(s) en "{estado_sel}"')
+    tabla_pills(df_triage, estado_sel)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -148,8 +207,8 @@ with col_sidebar:
             unsafe_allow_html=True,
         )
 
-        SECCIONES = [("triage", "🎯 Tablero de Triage")]
-        st.session_state.setdefault("eagle_section", "triage")
+        SECCIONES = [("leads", "🎯 Leads")]
+        st.session_state.setdefault("eagle_section", "leads")
         for sec_key, sec_label in SECCIONES:
             if st.button(sec_label, key=f"nav_{sec_key}", use_container_width=True):
                 st.session_state["eagle_section"] = sec_key
@@ -185,56 +244,45 @@ with col_sidebar:
 
 col_main.__enter__()
 
-header(dl.farmer_display(farmer), "Tablero de Triage")
+header(dl.farmer_display(farmer), "Leads")
 
 
 # ─────────────────────────────────────────────────────────────
-# CÁLCULOS BASE — recalculados en vivo contra HOY en cada carga
+# CÁLCULOS BASE — recalculados en vivo contra HOY en cada carga. El
+# universo de Ads/MD es ACUMULADO mes a mes (ver universo_mensual_path /
+# actualizar_universo_mensual en data_layer.py) -- "la totalidad de
+# prospectados debe ser fija todo el mes", pedido explícito de Sabas.
 # ─────────────────────────────────────────────────────────────
 
-t_ads = dl.triage_ads(hojas["ads"], productivity, hojas["checkout"], farmer)
-t_md = dl.triage_md(hojas["md"], productivity, farmer)
-t_churn = dl.triage_churn(hojas["churn"], productivity, farmer)
+gmv_map = dl.gmv_lookup(hojas["md"])
+t_ads = dl.triage_ads(hojas["ads"], productivity, hojas["checkout"], farmer, gmv_map, dl.universo_mensual_path("ads"))
+t_md = dl.triage_md(hojas["md"], productivity, farmer, gmv_map, dl.universo_mensual_path("md"))
+t_churn = dl.triage_churn(hojas["churn"], productivity, farmer, gmv_map)
 
 
 # ─────────────────────────────────────────────────────────────
-# TABLERO
+# LEADS
 # ─────────────────────────────────────────────────────────────
 
 tab_ads, tab_md, tab_churn = st.tabs(["🚀 Ads (Never Ads)", "🏷️ Markdown", "⚠️ Churn"])
 
-COLS_TRIAGE = ["Marca", "Code", "Días", "Motivo"]
-
 with tab_ads:
-    st.caption(f"Universo (0% Att. Bookings): {len(t_ads)} marcas — clasificadas en vivo contra hoy.")
+    st.caption(f"Universo fijo del mes (0% Att. Bookings acumulado): {len(t_ads)} marcas.")
     if len(t_ads):
-        barra_triage(t_ads, dl.TRIAGE_ORDEN)
-        tabla_bloque(t_ads, "Caliente", COLS_TRIAGE, "🔥 Caliente — actuar hoy", abierto=True)
-        tabla_bloque(t_ads, "Frío", COLS_TRIAGE, "🧊 Frío — antes de que se pierda")
-        tabla_bloque(t_ads, "Rechazado", COLS_TRIAGE, "⛔ Rechazado")
-        tabla_bloque(t_ads, "No Contactado", ["Marca", "Code"], "📭 No Contactado")
-        tabla_bloque(t_ads, "Cerrado", ["Marca", "Code"], "✅ Cerrado")
+        bloque_triage(t_ads, dl.TRIAGE_ORDEN, key_prefix="ads")
     else:
         st.caption("Sin datos de ADS para calcular el universo.")
 
 with tab_md:
-    st.caption(f"Universo (Markdown % en 0 o vacío): {len(t_md)} marcas — clasificadas en vivo contra hoy.")
+    st.caption(f"Universo fijo del mes (Markdown % en 0 o vacío, acumulado): {len(t_md)} marcas.")
     if len(t_md):
-        barra_triage(t_md, dl.TRIAGE_ORDEN)
-        tabla_bloque(t_md, "Caliente", COLS_TRIAGE, "🔥 Caliente — actuar hoy", abierto=True)
-        tabla_bloque(t_md, "Frío", COLS_TRIAGE, "🧊 Frío — antes de que se pierda")
-        tabla_bloque(t_md, "Rechazado", COLS_TRIAGE, "⛔ Rechazado")
-        tabla_bloque(t_md, "No Contactado", ["Marca", "Code"], "📭 No Contactado")
-        tabla_bloque(t_md, "Cerrado", ["Marca", "Code"], "✅ Cerrado")
+        bloque_triage(t_md, dl.TRIAGE_ORDEN, key_prefix="md")
     else:
         st.caption("Sin datos de MD para calcular el universo.")
 
 with tab_churn:
     st.caption(f"Universo (Prevention W1 + Churn de tu cartera): {len(t_churn)} marcas — sin reloj de antigüedad, por severidad.")
     if len(t_churn):
-        barra_triage(t_churn, ["PW1", "Churn", "Recuperada"])
-        tabla_bloque(t_churn, "PW1", ["Marca", "Code"], "🟡 Prevention W1 — actuar antes de que caiga", abierto=True)
-        tabla_bloque(t_churn, "Churn", ["Marca", "Code"], "🔴 Churn")
-        tabla_bloque(t_churn, "Recuperada", ["Marca", "Code"], "✅ Recuperada")
+        bloque_triage(t_churn, ["PW1", "Churn", "Recuperada"], key_prefix="churn")
     else:
         st.caption("Sin marcas en Prevention W1 o Churn para este Farmer.")

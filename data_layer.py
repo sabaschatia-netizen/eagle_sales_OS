@@ -16,6 +16,7 @@ disco directamente, así la UI decide si viene de upload o de un archivo
 local.
 """
 
+import os
 import re
 
 import pandas as pd
@@ -106,6 +107,85 @@ def _parse_pct(value):
         return float(s)
     except ValueError:
         return float("nan")
+
+
+def _parse_money(value):
+    """'$3.324' -> 3324.0 (el punto acá es separador de miles, no decimal
+    -- distinto criterio que _parse_pct, que sí usa coma decimal).
+    NaN/vacío -> 0.0 (para que sume/ordene bien sin casos especiales)."""
+    if pd.isna(value):
+        return 0.0
+    s = str(value).strip().replace("$", "").replace(".", "").replace(",", ".").strip()
+    if not s:
+        return 0.0
+    try:
+        return float(s)
+    except ValueError:
+        return 0.0
+
+
+def gmv_lookup(md_df):
+    """Diccionario {brand_key: gmv} construido desde MD.'GMV TOTAL $' --
+    se usa como referencia de GMV para las 3 tablas de triage (Ads, MD,
+    Churn), no solo para la de MD, porque es la única hoja del cruce que
+    trae GMV por marca. Una marca que no aparezca en MD (ej. ya cerrada
+    hace tiempo y fuera del export de MD) simplemente no tiene GMV de
+    referencia -- se le asigna 0, no revienta."""
+    d = md_df.copy()
+    if d.empty or "BRAND ID" not in d.columns or "GMV TOTAL $" not in d.columns:
+        return {}
+    d["brand_key"] = d["BRAND ID"].apply(_brand_key)
+    d["gmv"] = d["GMV TOTAL $"].apply(_parse_money)
+    return dict(zip(d["brand_key"], d["gmv"]))
+
+
+def universo_mensual_path(palanca, carpeta="data", hoy=None):
+    """Ruta del archivo que acumula el universo fijo del mes en curso
+    para esta palanca -- el nombre incluye año-mes, así un mes nuevo
+    arranca con archivo nuevo (universo vacío) automáticamente, sin
+    necesitar lógica de "reset" aparte."""
+    hoy = pd.Timestamp(hoy) if hoy is not None else pd.Timestamp.now()
+    return os.path.join(carpeta, f"universo_{palanca}_{hoy.strftime('%Y-%m')}.csv")
+
+
+def actualizar_universo_mensual(nuevos_keys_nombres, path):
+    """
+    Acumula el universo de "Prospectados" contra lo que ya estaba
+    guardado en `path` -- pedido explícito de Sabas: "la totalidad de
+    prospectados debe ser fija todo el mes". Una marca que calificó un
+    día (0% Att. Bookings / Markdown vacío) sigue contando el resto del
+    mes aunque al día siguiente ya no cumpla el filtro crudo -- si se
+    recalculara desde cero cada vez, una marca que empieza a atribuir
+    aunque sea un poco desaparecería del tablero a mitad de camino, sin
+    haber llegado a Cerrado ni a Rechazado.
+
+    `nuevos_keys_nombres`: dict {brand_key: nombre} de los que califican
+    HOY según el filtro crudo de la hoja. Se agregan los que falten al
+    archivo acumulado -- nunca se sacan los que ya estaban. Devuelve el
+    dict acumulado completo (lo que hay que usar como universo real).
+    """
+    if os.path.exists(path):
+        try:
+            prev = pd.read_csv(path, dtype=str)
+            acumulado = dict(zip(prev["brand_key"], prev["nombre"]))
+        except (pd.errors.EmptyDataError, KeyError):
+            acumulado = {}
+    else:
+        acumulado = {}
+
+    hubo_nuevos = False
+    for k, n in nuevos_keys_nombres.items():
+        if k and k not in acumulado:
+            acumulado[k] = n
+            hubo_nuevos = True
+
+    if hubo_nuevos or not os.path.exists(path):
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        pd.DataFrame({"brand_key": list(acumulado.keys()), "nombre": list(acumulado.values())}).to_csv(
+            path, index=False
+        )
+
+    return acumulado
 
 
 def farmers_disponibles(productivity_df):
@@ -451,34 +531,49 @@ def tracker_vencidos(df, hoy=None):
 
 TRIAGE_ORDEN = ["No Contactado", "Caliente", "Frío", "Rechazado", "Cerrado"]
 TRIAGE_COLORES = {
-    "No Contactado": "azul",
-    "Caliente": "granate",
-    "Frío": "celeste",
-    "Rechazado": "gris",
+    # Pedido explícito de Sabas: Gris=No contactado, Rojo=Rechazado,
+    # Azul oscuro=Caliente, Azul claro=Frío, Verde=Cerrado.
+    "No Contactado": "gris",
+    "Caliente": "azul",       # azul oscuro
+    "Frío": "celeste",        # azul claro
+    "Rechazado": "red",       # rojo de marca
     "Cerrado": "verde",
 }
 
+# "La totalidad de prospectados debe ser fija todo el mes" (pedido
+# explícito de Sabas): el universo no se recalcula desde cero cada día
+# contra la hoja cruda -- se acumula en un CSV mensual (ver
+# actualizar_universo_mensual arriba) y esa lista acumulada es la que se
+# usa como universo real. Una marca que entró un día sigue contando el
+# resto del mes aunque después ya no cumpla el filtro crudo.
 
-def _triage_generico(universo_keys, nombre_map, cerrados_keys, prod_farmer, col_señal, col_rechazo, val_rechazo, hoy):
+
+COLS_TRIAGE = ["Brand ID", "Brand Name", "GMV", "Status", "Días", "Motivo"]
+
+
+def _triage_generico(universo_keys, nombre_map, gmv_map, cerrados_keys, prod_farmer, col_señal, col_rechazo, val_rechazo, hoy):
     """
     Motor compartido de clasificación -- Ads y Markdown usan exactamente
     la misma lógica de antigüedad, solo cambia qué columna de Productivity
     marca "se tocó la palanca" (col_señal) y cuál marca "rechazo/no activo"
-    (col_rechazo/val_rechazo) para el override de conteo.
+    (col_rechazo/val_rechazo) para el override de conteo. Cada fila sale
+    con GMV ya pegado (desde gmv_map, ver gmv_lookup) para poder ordenar
+    de mayor a menor GMV y pintar el pill verde en la UI.
     """
     filas = []
     for key in universo_keys:
         nombre = nombre_map.get(key, key)
+        gmv = gmv_map.get(key, 0.0)
 
         if key in cerrados_keys:
-            filas.append({"Code": key, "Marca": nombre, "Estado": "Cerrado", "Días": None, "Motivo": ""})
+            filas.append({"Brand ID": key, "Brand Name": nombre, "GMV": gmv, "Status": "Cerrado", "Días": None, "Motivo": ""})
             continue
 
         marca_prod = prod_farmer[prod_farmer["brand_key"] == key]
         contacto_real = marca_prod[(marca_prod["¿Contactado?"] == "SI") & (marca_prod[col_señal] == "SI")]
 
         if contacto_real.empty:
-            filas.append({"Code": key, "Marca": nombre, "Estado": "No Contactado", "Días": None, "Motivo": ""})
+            filas.append({"Brand ID": key, "Brand Name": nombre, "GMV": gmv, "Status": "No Contactado", "Días": None, "Motivo": ""})
             continue
 
         fecha_inicio = contacto_real["Date"].min()
@@ -501,31 +596,42 @@ def _triage_generico(universo_keys, nombre_map, cerrados_keys, prod_farmer, col_
         else:
             estado, motivo = "Frío", ""
 
-        filas.append({"Code": key, "Marca": nombre, "Estado": estado, "Días": int(dias), "Motivo": motivo})
+        filas.append({"Brand ID": key, "Brand Name": nombre, "GMV": gmv, "Status": estado, "Días": int(dias), "Motivo": motivo})
 
-    return pd.DataFrame(filas, columns=["Code", "Marca", "Estado", "Días", "Motivo"])
+    df = pd.DataFrame(filas, columns=COLS_TRIAGE)
+    # Prioridad: mayor GMV primero, dentro de cada Status -- pedido
+    # explícito de Sabas ("organización de prioridad de mayor a menor GMV
+    # según su etapa").
+    return df.sort_values(["Status", "GMV"], ascending=[True, False]).reset_index(drop=True)
 
 
-def triage_ads(ads_df, productivity_df, checkout_df, farmer_email, hoy=None):
+def triage_ads(ads_df, productivity_df, checkout_df, farmer_email, gmv_map=None, universo_path=None, hoy=None):
     """
-    Universo: ADS.% Att. Bookings == 0 (parseado). Cerrado: Checkout con
-    Tipo de Contratacion="Adquisicion" para este Farmer. Señal de que se
-    tocó la palanca: Productivity.Ads=="SI". Override de rechazo:
-    Tipo Never Ads=="No activo".
+    Universo: ADS.% Att. Bookings == 0 (parseado), ACUMULADO mes a mes
+    (ver actualizar_universo_mensual) -- no se recalcula crudo cada vez.
+    Cerrado: Checkout con Tipo de Contratacion="Adquisicion" para este
+    Farmer. Señal de que se tocó la palanca: Productivity.Ads=="SI".
+    Override de rechazo: Tipo Never Ads=="No activo".
     """
     hoy = pd.Timestamp(hoy) if hoy is not None else pd.Timestamp.now().normalize()
+    gmv_map = gmv_map or {}
 
     prod = productivity_df[productivity_df["Farmer"] == farmer_email].copy()
     prod["brand_key"] = prod["Code"].apply(_brand_key)
 
     d = ads_df.copy()
     if d.empty or "BRAND" not in d.columns:
-        return pd.DataFrame(columns=["Code", "Marca", "Estado", "Días", "Motivo"])
+        return pd.DataFrame(columns=COLS_TRIAGE)
     d["brand_key"] = d["BRAND"].apply(_brand_key)
     d["att_pct"] = d["% Att. Bookings"].apply(_parse_pct)
-    universo = d[(d["att_pct"] == 0) & (d["brand_key"] != "")]
-    universo_keys = sorted(universo["brand_key"].unique())
-    nombre_map = dict(zip(universo["brand_key"], universo["BRAND"]))
+    hoy_califican = d[(d["att_pct"] == 0) & (d["brand_key"] != "")]
+    nuevos = dict(zip(hoy_califican["brand_key"], hoy_califican["BRAND"]))
+
+    if universo_path:
+        nombre_map = actualizar_universo_mensual(nuevos, universo_path)
+    else:
+        nombre_map = nuevos  # sin persistencia (ej. tests) -- se comporta como antes
+    universo_keys = sorted(nombre_map.keys())
 
     cerrados_keys = set()
     chk = checkout_df.copy()
@@ -533,42 +639,47 @@ def triage_ads(ads_df, productivity_df, checkout_df, farmer_email, hoy=None):
         chk = chk[(chk["FARMER"] == farmer_email) & (chk["Tipo de Contratacion"] == "Adquisicion")]
         cerrados_keys = set(chk["brand_key"])
 
-    return _triage_generico(universo_keys, nombre_map, cerrados_keys, prod, "Ads", "Tipo Never Ads", "No activo", hoy)
+    return _triage_generico(universo_keys, nombre_map, gmv_map, cerrados_keys, prod, "Ads", "Tipo Never Ads", "No activo", hoy)
 
 
-def triage_md(md_df, productivity_df, farmer_email, hoy=None):
+def triage_md(md_df, productivity_df, farmer_email, gmv_map=None, universo_path=None, hoy=None):
     """
-    Universo: MD.MARKDOWN % es NaN o == 0 (parseado). Cerrado: Productivity
-    ¿Se aceptó lo ofrecido?=="Sí" al menos una vez (vive en Productivity,
-    no hace falta cruzar con Checkout). Señal: Productivity.Markdown=="SI".
-    Override de rechazo: ¿Se aceptó lo ofrecido?=="No aceptó ninguno"
-    (mismo criterio de conteo que Ads, extendido por simetría -- no venía
-    explícito en el pedido original para MD, ver nota en el README).
+    Universo: MD.MARKDOWN % es NaN o == 0 (parseado), ACUMULADO mes a mes
+    igual que Ads. Cerrado: Productivity ¿Se aceptó lo ofrecido?=="Sí" al
+    menos una vez (vive en Productivity, no hace falta cruzar con
+    Checkout). Señal: Productivity.Markdown=="SI". Override de rechazo:
+    ¿Se aceptó lo ofrecido?=="No aceptó ninguno".
     """
     hoy = pd.Timestamp(hoy) if hoy is not None else pd.Timestamp.now().normalize()
+    gmv_map = gmv_map or {}
 
     prod = productivity_df[productivity_df["Farmer"] == farmer_email].copy()
     prod["brand_key"] = prod["Code"].apply(_brand_key)
 
     d = md_df.copy()
     if d.empty or "BRAND ID" not in d.columns:
-        return pd.DataFrame(columns=["Code", "Marca", "Estado", "Días", "Motivo"])
+        return pd.DataFrame(columns=COLS_TRIAGE)
     d["brand_key"] = d["BRAND ID"].apply(_brand_key)
     d["md_pct"] = d["MARKDOWN %"].apply(_parse_pct)
-    universo = d[(d["md_pct"].isna() | (d["md_pct"] == 0)) & (d["brand_key"] != "")]
-    universo_keys = sorted(universo["brand_key"].unique())
-    nombre_map = dict(zip(universo["brand_key"], universo["BRAND NAME"]))
+    hoy_califican = d[(d["md_pct"].isna() | (d["md_pct"] == 0)) & (d["brand_key"] != "")]
+    nuevos = dict(zip(hoy_califican["brand_key"], hoy_califican["BRAND NAME"]))
+
+    if universo_path:
+        nombre_map = actualizar_universo_mensual(nuevos, universo_path)
+    else:
+        nombre_map = nuevos
+    universo_keys = sorted(nombre_map.keys())
 
     aceptadas = prod[prod["¿Se aceptó lo ofrecido?"] == "Sí"]
     cerrados_keys = set(aceptadas["brand_key"])
 
     return _triage_generico(
-        universo_keys, nombre_map, cerrados_keys, prod,
+        universo_keys, nombre_map, gmv_map, cerrados_keys, prod,
         "Markdown", "¿Se aceptó lo ofrecido?", "No aceptó ninguno", hoy,
     )
 
 
-def triage_churn(churn_df, productivity_df, farmer_email):
+def triage_churn(churn_df, productivity_df, farmer_email, gmv_map=None):
     """
     3 bloques de SEVERIDAD, no de antigüedad (sin reloj de días, pedido
     explícito de Sabas): PW1, Churn, Recuperada. Universo: la propia hoja
@@ -577,10 +688,14 @@ def triage_churn(churn_df, productivity_df, farmer_email):
     "sin importar fecha" (no filtra si Fecha Reactivación quedó en el
     pasado o el futuro, solo si existe la señal) — tiene prioridad sobre
     PW1/Churn (partición mutuamente excluyente, sin doble conteo).
+
+    Mismas columnas que triage_ads/triage_md (Brand ID/Brand Name/GMV/
+    Status) para que la UI trate a las 3 palancas de forma uniforme.
     """
+    gmv_map = gmv_map or {}
     ch = churn_df.copy()
     if ch.empty or "COUNTRY_BRAND_ID" not in ch.columns:
-        return pd.DataFrame(columns=["Code", "Marca", "Estado"])
+        return pd.DataFrame(columns=["Brand ID", "Brand Name", "GMV", "Status"])
     if "FARMER" in ch.columns:
         # La hoja CHURN trae el Farmer SIN dominio ("sabas.ramirez"), a
         # diferencia de Productivity/Checkout que sí usan el correo
@@ -607,6 +722,7 @@ def triage_churn(churn_df, productivity_df, farmer_email):
             estado = "PW1"
         else:
             estado = "Churn"
-        filas.append({"Code": key, "Marca": nombre, "Estado": estado})
+        filas.append({"Brand ID": key, "Brand Name": nombre, "GMV": gmv_map.get(key, 0.0), "Status": estado})
 
-    return pd.DataFrame(filas, columns=["Code", "Marca", "Estado"])
+    df = pd.DataFrame(filas, columns=["Brand ID", "Brand Name", "GMV", "Status"])
+    return df.sort_values(["Status", "GMV"], ascending=[True, False]).reset_index(drop=True)
