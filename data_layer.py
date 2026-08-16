@@ -764,33 +764,29 @@ def cvr_por_brand_key(md_df, cvr_df):
     return {key: cvr_map.get(_norm_nombre(nombre)) for key, nombre in nombre_map.items()}
 
 
-def presupuesto_pct(valor_crudo, gmv_usd, tasa_ars=TASA_USD_ARS):
-    """'Presupuesto' de Checkout puede venir ya como % (se usa tal cual)
-    o como monto en $ ARS (se convierte a % del GMV -- mismo criterio de
-    conversión que Inversión) -- pedido explícito: 'sin importar si es
-    % o $'."""
+def _parse_presupuesto_valor(valor_crudo):
+    """Devuelve (tipo, valor) del 'Presupuesto' de Checkout TAL CUAL viene
+    -- pedido explícito de Sabas: "colocas el valor independiente que
+    sea $ o %, no lo conviertas todo a porcentaje" (convertir a % del
+    GMV daba números sin sentido en marcas de GMV chico -- ej. $40.000
+    de presupuesto sobre $10 de GMV daba "275.9%"). tipo="pct" si el
+    texto trae '%' (se usa tal cual); tipo="monto" si es un número (se
+    limpia el separador de miles, sin asumir ninguna moneda)."""
     if pd.isna(valor_crudo):
         return None
     s = str(valor_crudo).strip()
     if not s:
         return None
     if "%" in s:
-        return _parse_pct(s)
-    monto = _parse_money(s)
-    if not gmv_usd:
-        return None
-    gmv_ars = float(gmv_usd) * tasa_ars
-    if gmv_ars <= 0:
-        return None
-    return monto / gmv_ars * 100
+        return ("pct", _parse_pct(s))
+    return ("monto", _parse_money(s))
 
 
-def presupuesto_pct_por_brand(checkout_df, farmer_email, gmv_map, tasa_ars=TASA_USD_ARS):
-    """{brand_key: % cerrado} desde Checkout.Presupuesto para este
+def presupuesto_valor_por_brand(checkout_df, farmer_email):
+    """{brand_key: (tipo, valor)} desde Checkout.Presupuesto para este
     Account Manager. Con más de una fila de Checkout por marca, se
     queda con la más reciente (ordenado por Fecha antes de recorrer)."""
     chk = checkout_df
-    gmv_map = gmv_map or {}
     if chk is None or chk.empty or not {"FARMER", "brand_key", "Presupuesto"}.issubset(chk.columns):
         return {}
     sub = chk[chk["FARMER"] == farmer_email]
@@ -798,8 +794,7 @@ def presupuesto_pct_por_brand(checkout_df, farmer_email, gmv_map, tasa_ars=TASA_
         sub = sub.sort_values("Fecha")
     out = {}
     for _, row in sub.iterrows():
-        key = row["brand_key"]
-        pct = presupuesto_pct(row.get("Presupuesto"), gmv_map.get(key, 0.0), tasa_ars)
-        if pct is not None:
-            out[key] = pct
+        val = _parse_presupuesto_valor(row.get("Presupuesto"))
+        if val is not None:
+            out[row["brand_key"]] = val
     return out

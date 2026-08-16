@@ -82,7 +82,7 @@ def header(title, subtitle):
         f'<div class="app-header"><div class="header-left">'
         f'<div class="header-title">{title}</div>'
         f'<div class="header-subtitle">{subtitle}</div></div>'
-        f'<div class="header-logo-right">{logo_img(52)}</div></div>',
+        f'<div class="header-logo-right">{logo_img(68)}</div></div>',
         unsafe_allow_html=True,
     )
 
@@ -169,10 +169,12 @@ def _col_inversion(r, ctx):
 
 
 def _col_cerrado(r, ctx):
-    pct = ctx["presupuesto_map"].get(r["Brand ID"])
-    if pct is None:
+    val = ctx["presupuesto_map"].get(r["Brand ID"])
+    if val is None:
         return _celda_placeholder()
-    return _pill_html(f"{pct:.1f}%", "_closed")
+    tipo, monto = val
+    texto = f"{monto:.1f}%" if tipo == "pct" else f'${monto:,.0f}'.replace(",", ".")
+    return _pill_html(texto, "_closed")
 
 
 # Columnas extra por nivel del funnel -- solo aplican a Ads/Markdown
@@ -320,7 +322,7 @@ f_churn = dl.funnel_churn(hojas["churn"], productivity, am, gmv_map)
 # resuelto una sola vez acá y pasado como contexto a cada tabla.
 rangos_ads, rangos_md = dl.load_recommended_budgets(ruta_datos)
 cvr_map = dl.cvr_por_brand_key(hojas["md"], dl.load_cvr(ruta_datos))
-presupuesto_map = dl.presupuesto_pct_por_brand(checkout, am, gmv_map)
+presupuesto_map = dl.presupuesto_valor_por_brand(checkout, am)
 
 ctx_ads = {"tipo": "ads", "rangos_ads": rangos_ads, "rangos_md": rangos_md,
            "cvr_map": cvr_map, "presupuesto_map": presupuesto_map}
