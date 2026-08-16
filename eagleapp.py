@@ -1,13 +1,14 @@
 """
 Eagle — vista de altura sobre tu propio funnel de ventas.
 
-Tablero de TRIAGE (agosto 2026, octavo ajuste -- reemplaza el enfoque de
-"funnel" del primer intento, pedido explícito de Sabas): no mide
-conversión secuencial, mide en qué estado está CADA marca de tu cartera
-elegible AHORA MISMO -- No Contactado / Caliente / Frío / Rechazado /
-Cerrado para Ads y MD, PW1 / Churn / Recuperada para Churn -- con el
-reloj de antigüedad corriendo contra la fecha real de HOY, no contra la
-ventana del Excel, porque el archivo se actualiza a diario.
+Funnel de 4 niveles (agosto 2026, noveno ajuste -- reemplaza el tablero
+de triage plano del ajuste anterior, estructura de niveles y reglas
+también pedidas explícitamente por Sabas), para Ads y Markdown: Base
+(fija todo el mes) -> Contactados/No Contactado/Sin Gestionar -> Pipeline
+vs. Rechazado -> Caliente vs. Frío -> Cierre (terminal, aparte). Churn
+sigue con su propio tablero de 3 estados por severidad (PW1/Churn/
+Recuperada), sin tocar -- pedido explícito de Sabas, "por ahora solo
+Ads y Markdown".
 
 Correr local:
     pip install -r requirements.txt
@@ -27,6 +28,7 @@ st.set_page_config(page_title="Eagle", page_icon=favicon(), layout="wide", initi
 st.markdown(build_css(), unsafe_allow_html=True)
 
 EJEMPLO_PATH = os.path.join("data", "CRUCE_PRO_SALES_ejemplo.xlsx")
+
 
 
 # ─────────────────────────────────────────────────────────────
@@ -133,7 +135,9 @@ def tabla_pills(df_triage, estado, columnas=("Brand ID", "Brand Name", "GMV", "S
 
 def bloque_triage(df_triage, orden, key_prefix):
     """Arma el pie + el selector de respaldo + la tabla de pills para una
-    palanca completa (Ads, MD, o Churn)."""
+    palanca completa. Se sigue usando SOLO para Churn -- Ads y MD pasaron
+    al funnel de 4 niveles (ver funnel_visual abajo), pedido explícito de
+    Sabas: "la de Churn no la toquemos todavía"."""
     clickeado = pie_triage(df_triage, orden, key=f"pie_{key_prefix}")
 
     disponibles = [e for e in orden if (df_triage["Status"] == e).sum() > 0] or orden
@@ -143,6 +147,127 @@ def bloque_triage(df_triage, orden, key_prefix):
     )
     st.caption(f'{(df_triage["Status"] == estado_sel).sum()} marca(s) en "{estado_sel}"')
     tabla_pills(df_triage, estado_sel)
+
+
+def _nivel_card_abre(titulo, total, sub):
+    st.markdown(
+        f'<div class="eagle-card accent" style="margin-bottom:6px;">'
+        f'<div class="eagle-label">{titulo}</div>'
+        f'<div class="eagle-value">{total:,}'.replace(",", ".")
+        + f'<span style="font-size:13px;font-weight:600;color:{COLORS["muted"]};"> {sub}</span></div>'
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def _segmentos_clicables(segmentos, key_prefix, seleccion_actual):
+    """
+    Fila de botones proporcionales al conteo de cada segmento, coloreados
+    con TRIAGE_COLORES -- reemplaza la "barra segmentada" de la
+    referencia de Sabas por algo 100% clicable y 100% probado (a
+    diferencia del pie chart de Churn, esto SÍ lo puedo verificar de
+    punta a punta con AppTest, sin depender de parsear un evento de
+    Plotly a ciegas).
+
+    `segmentos`: lista de (status, n). Devuelve el status clickeado en
+    este rerun, o None si no se tocó ningún botón.
+    """
+    total = sum(n for _, n in segmentos) or 1
+    anchos = [max(n, total * 0.06) for _, n in segmentos]  # piso visual para que un segmento chico no desaparezca
+    cols = st.columns(anchos)
+    clickeado = None
+    for col, (status, n) in zip(cols, segmentos):
+        color = COLORS[dl.TRIAGE_COLORES.get(status, "gris")]
+        with col:
+            st.markdown(
+                f"""<style>
+                .st-key-{key_prefix}_{status.replace(" ", "_")} .stButton button {{
+                    background:{color} !important; color:#fff !important; border:none !important;
+                    {'outline:2px solid ' + COLORS["text"] + ' !important;' if status == seleccion_actual else ''}
+                }}
+                </style>""",
+                unsafe_allow_html=True,
+            )
+            with st.container(key=f"{key_prefix}_{status.replace(' ', '_')}"):
+                if st.button(f"{status}\n{n}", key=f"btn_{key_prefix}_{status}", use_container_width=True):
+                    clickeado = status
+    return clickeado
+
+
+def funnel_visual(f, df_detalle, key_prefix):
+    """
+    Funnel de 4 niveles anidados -- estructura y reglas pedidas
+    explícitamente por Sabas (ver docstring del módulo y de
+    funnel_counts en data_layer.py). Cada nivel es un subconjunto real
+    del anterior, "regla de oro": la suma de los segmentos de cada nivel
+    es EXACTAMENTE el total de ese nivel -- Cierre queda afuera de esa
+    cuenta a propósito (ver nota de diseño en data_layer.py).
+
+    Devuelve/gestiona en session_state cuál segmento está seleccionado
+    para la tabla de pills de abajo.
+    """
+    sel_key = f"funnel_sel_{key_prefix}"
+    st.session_state.setdefault(sel_key, "Sin Gestionar")
+
+    # Nivel 1 — Base
+    _nivel_card_abre("Base prospectada (fija todo el mes)", f["base"], "100%")
+    click = _segmentos_clicables(
+        [("Sin Gestionar", f["sin_gestionar"]), ("No Contactado", f["no_contactado"]),
+         ("Caliente", f["caliente"]), ("Frío", f["frio"]), ("Rechazado", f["rechazado"]), ("Cerrado", f["cerrado"])],
+        key_prefix=f"{key_prefix}_n1", seleccion_actual=st.session_state[sel_key],
+    )
+    if click:
+        st.session_state[sel_key] = click
+    st.markdown('<div style="text-align:center;color:%s;">↓</div>' % COLORS["muted"], unsafe_allow_html=True)
+
+    # Nivel 2 — Contactados (abiertos, sin Cerrados)
+    pct_contactados = (f["contactados"] / f["base"] * 100) if f["base"] else 0
+    _nivel_card_abre("Contactados (abiertos)", f["contactados"], f"{pct_contactados:.1f}% de la base")
+    click = _segmentos_clicables(
+        [("Caliente", f["caliente"]), ("Frío", f["frio"]), ("Rechazado", f["rechazado"])],
+        key_prefix=f"{key_prefix}_n2", seleccion_actual=st.session_state[sel_key],
+    )
+    if click:
+        st.session_state[sel_key] = click
+    st.markdown('<div style="text-align:center;color:%s;">↓</div>' % COLORS["muted"], unsafe_allow_html=True)
+
+    # Nivel 3 — Pipeline
+    _nivel_card_abre("Pipeline", f["pipeline"], f'de {f["contactados"]} contactados')
+    click = _segmentos_clicables(
+        [("Caliente", f["caliente"]), ("Frío", f["frio"])],
+        key_prefix=f"{key_prefix}_n3", seleccion_actual=st.session_state[sel_key],
+    )
+    if click:
+        st.session_state[sel_key] = click
+    st.caption("↻ Vence el bucket (>5 días, o >3 never-ads en la ventana) → regresa a Contactados, marcado como Rechazado.")
+    st.markdown('<div style="text-align:center;color:%s;">↓</div>' % COLORS["muted"], unsafe_allow_html=True)
+
+    # Nivel 4 — Cierre (terminal, sin desglose)
+    st.markdown(
+        f'<div class="eagle-card" style="border-left:3px solid {COLORS["verde"]};text-align:left;">'
+        f'<div class="eagle-label">Cierre</div>'
+        f'<div class="eagle-value" style="color:{COLORS["verde"]};">{f["cerrado"]:,}'.replace(",", ".")
+        + f'<span style="font-size:13px;font-weight:600;color:{COLORS["muted"]};"> {f["cierre_sobre_base"]:.1f}% de la base</span></div>'
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+    if st.button("Ver marcas de: Cerrado", key=f"btn_cierre_{key_prefix}"):
+        st.session_state[sel_key] = "Cerrado"
+
+    # Footer de métricas -- fórmulas exactas pedidas por Sabas
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        card("Tasa de contacto", f'{f["tasa_contacto"]:.1f}%', "sobre el total contactado real (incluye Cerrados)")
+    with c2:
+        card("Cierre / Contactados", f'{f["cierre_sobre_contactados"]:.1f}%')
+    with c3:
+        card("Cierre / Base", f'{f["cierre_sobre_base"]:.1f}%')
+
+    st.markdown("---")
+    estado_sel = st.session_state[sel_key]
+    st.markdown(f"##### Marcas en: {estado_sel}")
+    st.caption(f'{(df_detalle["Status"] == estado_sel).sum()} marca(s) — ordenadas de mayor a menor GMV.')
+    tabla_pills(df_detalle, estado_sel)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -267,21 +392,19 @@ t_churn = dl.triage_churn(hojas["churn"], productivity, farmer, gmv_map)
 tab_ads, tab_md, tab_churn = st.tabs(["🚀 Ads (Never Ads)", "🏷️ Markdown", "⚠️ Churn"])
 
 with tab_ads:
-    st.caption(f"Universo fijo del mes (0% Att. Bookings acumulado): {len(t_ads)} marcas.")
     if len(t_ads):
-        bloque_triage(t_ads, dl.TRIAGE_ORDEN, key_prefix="ads")
+        funnel_visual(dl.funnel_counts(t_ads), t_ads, key_prefix="ads")
     else:
         st.caption("Sin datos de ADS para calcular el universo.")
 
 with tab_md:
-    st.caption(f"Universo fijo del mes (Markdown % en 0 o vacío, acumulado): {len(t_md)} marcas.")
     if len(t_md):
-        bloque_triage(t_md, dl.TRIAGE_ORDEN, key_prefix="md")
+        funnel_visual(dl.funnel_counts(t_md), t_md, key_prefix="md")
     else:
         st.caption("Sin datos de MD para calcular el universo.")
 
 with tab_churn:
-    st.caption(f"Universo (Prevention W1 + Churn de tu cartera): {len(t_churn)} marcas — sin reloj de antigüedad, por severidad.")
+    st.caption(f"Universo (Prevention W1 + Churn de tu cartera): {len(t_churn)} marcas — sin reloj de antigüedad, por severidad. (Sin cambios en este ajuste, pedido explícito de Sabas.)")
     if len(t_churn):
         bloque_triage(t_churn, ["PW1", "Churn", "Recuperada"], key_prefix="churn")
     else:

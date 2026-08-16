@@ -499,40 +499,56 @@ def tracker_vencidos(df, hoy=None):
 
 
 # ─────────────────────────────────────────────────────────────
-# TABLERO DE TRIAGE (Ads / Markdown / Churn) -- reemplaza el enfoque de
-# "funnel" (agosto 2026, octavo ajuste, pedido explícito de Sabas). No es
-# un embudo de conversión secuencial: es una clasificación mutuamente
-# excluyente de TODA la cartera elegible ("universo") en exactamente uno
-# de 5 estados, recalculada en vivo contra la fecha real de HOY cada vez
-# que se sube un archivo nuevo -- no contra la ventana del Excel.
+# FUNNEL DE 4 NIVELES (Ads / Markdown) -- reemplaza el tablero de triage
+# plano (agosto 2026, noveno ajuste, pedido explícito de Sabas, con
+# descripción/estructura del funnel también suya). SÍ es un funnel real
+# esta vez (a diferencia del primer intento): cada nivel es un
+# subconjunto genuino del anterior, con "regla de oro" -- la suma de los
+# segmentos de cada nivel es EXACTAMENTE el total de ese nivel.
 #
-# Regla de antigüedad (Ads y Markdown, validada con ejemplos reales de
-# Sabas: "hoy 15 -> caliente hasta 13, frío hasta 11" / "hoy 10 ->
-# caliente hasta 8, frío hasta 6"):
+#   Nivel 1 -- Base (universo fijo del mes, ver actualizar_universo_mensual)
+#     = Sin Gestionar + No Contactado + Contactados-abiertos + Cerrados
+#   Nivel 2 -- Contactados-abiertos = Pipeline + Rechazado
+#   Nivel 3 -- Pipeline = Caliente + Frío
+#   Nivel 4 -- Cierre (independiente, NO se resta de los niveles de
+#     arriba -- ver nota de diseño abajo)
+#
+# DECISIÓN DE DISEÑO (resolviendo una tensión real del propio ejemplo de
+# Sabas, donde Contactados=Pipeline+Rechazado sin restar Cierre en
+# ningún lado): Cierre se saca COMPLETO de la caja de Contactados/
+# Pipeline -- un cerrado no aparece como Pipeline ni como Rechazado, vive
+# solo en el bloque terminal de Cierre. Por eso "Contactados" tal como se
+# ve en el Nivel 2 ya NO incluye a los que cerraron -- para el footer
+# ("tasa de contacto real") sí hay que sumarlos de vuelta, tal como pedía
+# la nota original de Sabas ("no solo el nivel 2 renombrado").
+#
+# Regla de antigüedad (Ads y Markdown, sin cambios respecto al ajuste
+# anterior, validada con ejemplos reales de Sabas):
 #   días_transcurridos = HOY − fecha del primer contacto REAL de esa
 #                         palanca específica
 #   Caliente:   0, 1 o 2 días  (día 1-3 de vida del lead)
 #   Frío:       3 o 4 días     (día 4-5)
-#   Rechazado:  5+ días        (día 6 en adelante) -- o el override de
-#               conteo (>3 toques de rechazo dentro de la ventana de 5
-#               días desde el primer contacto), lo que ocurra primero.
+#   Rechazado:  5+ días, o más de 3 rechazos/no-activo en la ventana de
+#               5 días desde el primer contacto (lo que ocurra primero)
+#   -- este vencimiento es la misma "regla de loop" que describe Sabas:
+#   el prospecto no sale del sistema, se reclasifica como Rechazado
+#   dentro de Contactados.
 #
-# "No Contactado" (pedido explícito de Sabas, ajuste final) se dispara
-# en cualquiera de estos 3 casos, tratados como el mismo estado:
-#   1) la marca nunca tiene fila en Productivity, o
-#   2) tiene filas pero ninguna con ¿Contactado?=SI, o
-#   3) tuvo contacto real, pero NINGUNA de esas conversaciones tocó la
-#      palanca específica (columna de señal en NO/vacío en todas) --
-#      hablar de OPS tres veces no cuenta como haber hablado de Ads.
-# Por eso "días_transcurridos" arranca en la primera fila que cumple
-# AMBAS condiciones (contacto real + palanca tocada), no en la primera
-# fila de Productivity en general.
+# "Sin Gestionar" vs. "No Contactado" (distinción nueva de este ajuste):
+#   Sin Gestionar: la marca no tiene NINGUNA fila en Productivity --
+#     nunca se tocó nada, ni siquiera un intento fallido.
+#   No Contactado: sí hay fila(s) en Productivity, pero ninguna logró
+#     contacto real (¿Contactado?=SI) con la palanca específica tocada.
 # ─────────────────────────────────────────────────────────────
 
-TRIAGE_ORDEN = ["No Contactado", "Caliente", "Frío", "Rechazado", "Cerrado"]
+TRIAGE_ORDEN = ["Sin Gestionar", "No Contactado", "Caliente", "Frío", "Rechazado", "Cerrado"]
 TRIAGE_COLORES = {
     # Pedido explícito de Sabas: Gris=No contactado, Rojo=Rechazado,
-    # Azul oscuro=Caliente, Azul claro=Frío, Verde=Cerrado.
+    # Azul oscuro=Caliente, Azul claro=Frío, Verde=Cerrado. Sin Gestionar
+    # (categoría nueva de este ajuste) usa el mismo gris -- ambos son
+    # "todavía no entró a ningún proceso", incluso si son técnicamente
+    # distintos.
+    "Sin Gestionar": "gris",
     "No Contactado": "gris",
     "Caliente": "azul",       # azul oscuro
     "Frío": "celeste",        # azul claro
@@ -570,6 +586,11 @@ def _triage_generico(universo_keys, nombre_map, gmv_map, cerrados_keys, prod_far
             continue
 
         marca_prod = prod_farmer[prod_farmer["brand_key"] == key]
+
+        if marca_prod.empty:
+            filas.append({"Brand ID": key, "Brand Name": nombre, "GMV": gmv, "Status": "Sin Gestionar", "Días": None, "Motivo": ""})
+            continue
+
         contacto_real = marca_prod[(marca_prod["¿Contactado?"] == "SI") & (marca_prod[col_señal] == "SI")]
 
         if contacto_real.empty:
@@ -603,6 +624,40 @@ def _triage_generico(universo_keys, nombre_map, gmv_map, cerrados_keys, prod_far
     # explícito de Sabas ("organización de prioridad de mayor a menor GMV
     # según su etapa").
     return df.sort_values(["Status", "GMV"], ascending=[True, False]).reset_index(drop=True)
+
+
+def funnel_counts(df_detalle):
+    """
+    Agrega la tabla plana de clasificación (una fila por marca, columna
+    Status con 6 valores posibles) a los números del funnel de 4 niveles.
+    Cierre se saca completo de Contactados/Pipeline (ver nota de diseño
+    arriba) -- por eso "tasa_contacto" recalcula sumando Cerrados de
+    vuelta, tal como pedía la nota original de Sabas.
+    """
+    c = df_detalle["Status"].value_counts() if len(df_detalle) else pd.Series(dtype=int)
+    sin_gestionar = int(c.get("Sin Gestionar", 0))
+    no_contactado = int(c.get("No Contactado", 0))
+    caliente = int(c.get("Caliente", 0))
+    frio = int(c.get("Frío", 0))
+    rechazado = int(c.get("Rechazado", 0))
+    cerrado = int(c.get("Cerrado", 0))
+
+    pipeline = caliente + frio
+    contactados = pipeline + rechazado           # "Contactados-abiertos" del Nivel 2 -- excluye cerrados
+    base = sin_gestionar + no_contactado + contactados + cerrado
+
+    contactados_reales = contactados + cerrado    # para el footer, ver nota de diseño
+
+    return {
+        "base": base,
+        "sin_gestionar": sin_gestionar, "no_contactado": no_contactado,
+        "contactados": contactados, "cerrado": cerrado,
+        "pipeline": pipeline, "rechazado": rechazado,
+        "caliente": caliente, "frio": frio,
+        "tasa_contacto": (contactados_reales / base * 100) if base else 0.0,
+        "cierre_sobre_contactados": (cerrado / contactados_reales * 100) if contactados_reales else 0.0,
+        "cierre_sobre_base": (cerrado / base * 100) if base else 0.0,
+    }
 
 
 def triage_ads(ads_df, productivity_df, checkout_df, farmer_email, gmv_map=None, universo_path=None, hoy=None):
