@@ -81,18 +81,32 @@ def build_css():
         overflow-y: auto !important;
     }}
     /* Compensar el contenido principal para que no quede tapado detrás
-       del sidebar fijo. Varios selectores candidatos a la vez (mismo
-       patrón defensivo que ya tuvo que usar Wingman para este mismo
-       tipo de bug): la clase exacta del contenedor principal puede
-       variar entre versiones de Streamlit -- el que no exista en la
-       versión activa simplemente no hace nada, sin romper nada. */
+       del sidebar fijo. BUG REAL ENCONTRADO (comparando con el CSS real
+       de Wingman): solo poner margin-left NO alcanza -- en layout="wide"
+       el contenedor tiene width:100% de su padre, así que
+       width:100% + margin-left:260px se desborda 260px más allá del
+       viewport (el navegador termina scrolleado, y como el sidebar es
+       position:fixed -- no se mueve con ese scroll -- el contenido
+       scrolleado queda "peinado" por debajo, se ve como si estuviera
+       cruzado). Wingman lo resuelve con max-width:1500px en
+       .block-container; acá se resuelve de raíz con width:calc(), que
+       ACHICA el elemento en vez de solo correrlo -- más robusto todavía.
+       Varios selectores candidatos a la vez (mismo patrón defensivo que
+       ya usa Wingman para este tipo de bug entre versiones distintas de
+       Streamlit). Padding-left extra = el mismo "aire" que tiene Wingman
+       entre el sidebar y el contenido. */
     section[data-testid="stMain"] .stMainBlockContainer,
     section[data-testid="stMain"] > div,
     section[data-testid="stMain"] .block-container,
     [data-testid="stAppViewContainer"] > .main,
     [data-testid="stAppViewBlockContainer"] {{
         margin-left: 260px !important;
+        width: calc(100% - 260px) !important;
+        max-width: 1500px !important;
+        padding-left: 1.5rem !important;
+        box-sizing: border-box !important;
     }}
+    html, body {{ overflow-x: hidden !important; }}
 
     .st-key-eagle-sidebar {{
         background: {C['red']} !important;
