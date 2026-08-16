@@ -80,9 +80,20 @@ def build_css():
         z-index: 999 !important;
         overflow-y: auto !important;
     }}
-    section[data-testid="stMain"] .stMainBlockContainer {{
+    /* Compensar el contenido principal para que no quede tapado detrás
+       del sidebar fijo. Varios selectores candidatos a la vez (mismo
+       patrón defensivo que ya tuvo que usar Wingman para este mismo
+       tipo de bug): la clase exacta del contenedor principal puede
+       variar entre versiones de Streamlit -- el que no exista en la
+       versión activa simplemente no hace nada, sin romper nada. */
+    section[data-testid="stMain"] .stMainBlockContainer,
+    section[data-testid="stMain"] > div,
+    section[data-testid="stMain"] .block-container,
+    [data-testid="stAppViewContainer"] > .main,
+    [data-testid="stAppViewBlockContainer"] {{
         margin-left: 260px !important;
     }}
+
     .st-key-eagle-sidebar {{
         background: {C['red']} !important;
         padding: 14px 12px !important;
@@ -90,10 +101,34 @@ def build_css():
     }}
     .st-key-eagle-sidebar * {{ color: {C['white']} !important; }}
 
+    /* ── File uploader: el ícono SVG usa "fill", no "color" -- y el botón
+       "Browse files" interno no hereda de ".stButton" -- hay que
+       forzarlos aparte o quedan blanco sobre blanco/invisibles. ── */
     .st-key-eagle-sidebar [data-testid="stFileUploaderDropzone"] {{
         background: rgba(255,255,255,0.10) !important;
         border: 1px dashed rgba(255,255,255,0.35) !important;
+        border-radius: 10px !important;
     }}
+    .st-key-eagle-sidebar [data-testid="stFileUploaderDropzone"] svg {{
+        fill: {C['white']} !important;
+    }}
+    .st-key-eagle-sidebar [data-testid="stFileUploaderDropzone"] small,
+    .st-key-eagle-sidebar [data-testid="stFileUploaderDropzone"] span,
+    .st-key-eagle-sidebar [data-testid="stFileUploaderDropzone"] div {{
+        color: {C['white']} !important;
+    }}
+    .st-key-eagle-sidebar [data-testid="stFileUploaderDropzone"] button,
+    .st-key-eagle-sidebar [data-testid="stBaseButton-secondary"] {{
+        background: {C['white']} !important;
+        color: {C['red']} !important;
+        border: none !important;
+        font-weight: 700 !important;
+    }}
+    .st-key-eagle-sidebar [data-testid="stFileUploaderFile"] {{
+        background: rgba(255,255,255,0.12) !important;
+        border-radius: 8px !important;
+    }}
+    .st-key-eagle-sidebar [data-testid="stFileUploaderFileName"] {{ color: {C['white']} !important; }}
     .st-key-eagle-sidebar .stTextInput input, .st-key-eagle-sidebar [data-baseweb="select"] {{
         background: rgba(255,255,255,0.14) !important;
         border-radius: 10px !important;
