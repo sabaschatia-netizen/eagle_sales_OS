@@ -27,6 +27,8 @@ import pandas as pd
 # CARGA
 # ─────────────────────────────────────────────────────────────
 
+AM_UNICO = "(único)"
+
 SHEET_ALIASES = {
     "productivity": "productivity",
     "checkout": "checkout",
@@ -78,6 +80,14 @@ def load_cruce(file_like_or_path):
         checkout["FARMER"] = checkout["FARMER"].astype(str).str.strip()
     if "Code" in productivity.columns:
         productivity["brand_key"] = productivity["Code"].apply(_brand_key)
+
+    # App de un solo Account Manager: si el export no trae columna de
+    # Farmer (o viene vacía), se rellena con un valor único en vez de
+    # reventar -- antes esto tiraba "No encontré la columna Farmer".
+    if "Farmer" not in productivity.columns or productivity["Farmer"].dropna().empty:
+        productivity["Farmer"] = AM_UNICO
+    if not checkout.empty and ("FARMER" not in checkout.columns or checkout["FARMER"].dropna().empty):
+        checkout["FARMER"] = AM_UNICO
 
     hojas["productivity"] = productivity
     hojas["checkout"] = checkout
@@ -189,6 +199,16 @@ def actualizar_universo_mensual(nuevos_keys_nombres, path):
     return acumulado
 
 
+def resolver_am(productivity_df):
+    """Account Manager de la app. Es de un solo usuario, así que se
+    resuelve solo (el valor más frecuente de la columna Farmer) -- no hay
+    selector, pedido explícito de Sabas: "solo soy yo"."""
+    if "Farmer" not in productivity_df.columns:
+        return AM_UNICO
+    vals = productivity_df["Farmer"].dropna()
+    return vals.mode().iloc[0] if not vals.empty else AM_UNICO
+
+
 def farmers_disponibles(productivity_df):
     if "Farmer" not in productivity_df.columns:
         return []
@@ -198,6 +218,8 @@ def farmers_disponibles(productivity_df):
 def farmer_display(email):
     """'sabas.ramirez@rappi.com' -> 'Sabas Ramirez' -- mismo criterio que
     usa Wingman para mostrar el nombre en la session pill."""
+    if email == AM_UNICO:
+        return "Account Manager"
     if not email or "@" not in str(email):
         return str(email)
     local = str(email).split("@")[0]

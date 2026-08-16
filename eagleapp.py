@@ -48,6 +48,18 @@ def encontrar_datos():
         for f in sorted(os.listdir(carpeta)):
             if f.lower().endswith((".xlsx", ".xlsm")) and not f.startswith("~$"):
                 candidatos.append(os.path.join(carpeta, f))
+
+    # No basta con agarrar el primer .xlsx: el repo puede tener otros
+    # archivos viejos. Se elige el que de verdad tenga la hoja
+    # PRODUCTIVITY -- antes agarraba cualquiera y fallaba después con
+    # "No encontré la columna Farmer".
+    for ruta in candidatos:
+        try:
+            hojas = {h.strip().lower() for h in pd.ExcelFile(ruta).sheet_names}
+            if "productivity" in hojas:
+                return ruta, candidatos
+        except (OSError, ValueError):
+            continue
     return (candidatos[0] if candidatos else None), candidatos
 
 # Anchos de cada nivel del funnel -- se van angostando para reforzar la
@@ -181,11 +193,7 @@ with col_sidebar:
         hojas = dl.load_cruce(ruta_datos)
         productivity, checkout = hojas["productivity"], hojas["checkout"]
 
-        ams = dl.farmers_disponibles(productivity)
-        if not ams:
-            st.error("No encontré la columna Farmer en el archivo.")
-            st.stop()
-        am = st.selectbox("Account Manager", ams, index=0, label_visibility="collapsed")
+        am = dl.resolver_am(productivity)
 
         st.markdown(
             f'<div class="session-pill"><div class="session-avatar">{dl.farmer_initials(am)}</div>'
