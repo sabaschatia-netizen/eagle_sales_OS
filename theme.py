@@ -197,46 +197,43 @@ def build_css():
 
     /* Botón invisible que cubre la card entera -- así el clic/hover es
        sobre el BLOQUE completo, no sobre la barra interna (pedido
-       explícito). El contenedor de cada nivel (.st-key-fncard_*) es el
-       ancestro real tanto de la card como del botón, así que position
-       absolute + inset:0 lo estira exacto sobre la card sin importar su
-       alto real -- no hay valores fijos en px que puedan quedar cortos
-       o largos y dejar un resto de caja visible.
+       explícito).
 
-       BUG REAL ENCONTRADO (pedido explícito de Sabas: "el clic cae
-       debajo de la card, en el vacío junto a la flecha"): Streamlit
-       envuelve cada st.markdown/st.button en su propio
-       [data-testid="stElementContainer"], y por defecto les mete un
-       margin-bottom entre ellos. El botón absoluto se posiciona bien
-       relativo al contenedor, pero el contenedor mismo terminaba más
-       alto que la card visible porque esos 4 elementos (div apertura,
-       div de la card, botón, div cierre) sumaban sus márgenes por
-       defecto -- el click-zone (inset:0 del contenedor completo)
-       quedaba más grande que la card, invadiendo el espacio de la
-       flecha de abajo. Se pone margin/padding en 0 en todos los
-       elementos internos para que la altura del contenedor sea
-       EXACTAMENTE la altura visual de la card. */
+       BUG REAL ENCONTRADO #2 (pedido explícito de Sabas, con video: "la
+       manito solo carga en la parte inferior de la card, no en
+       cualquier punto"): la versión anterior usaba
+       `position:absolute; inset:0; height:100%` sobre el botón. Ese
+       truco tiene una trampa clásica de CSS -- un `height:100%` en un
+       elemento con posición absoluta solo se resuelve contra la altura
+       del ancestro posicionado SI ese ancestro tiene una altura
+       explícita. Nuestro contenedor (`.st-key-fncard_*`) nunca la tiene
+       -- mide lo que su contenido mide (`height:auto`) -- así que el
+       `height:100%` del botón caía a "auto" y el botón quedaba con su
+       alto intrínseco real (chico, tipo un botón normal), anclado
+       contra el borde inferior por el `bottom:0` del inset. Resultado:
+       la manito solo aparecía pegada al fondo de la card (y un poco por
+       fuera, en el hueco de la flecha), y el resto de la card -- título,
+       número -- quedaba con el cursor de flecha normal.
+
+       SOLUCIÓN: en vez de "adivinar" la altura con position/inset, se
+       hace que la card y el botón ocupen la MISMA celda de un CSS
+       Grid. El alineamiento por defecto de una celda de grid es
+       `stretch` en ambos ejes, y eso SÍ funciona sobre celdas de alto
+       automático (no tiene la trampa del absolute) -- así el botón
+       siempre mide exactamente lo mismo que la card, sea cual sea su
+       alto real, sin necesidad de position/inset en absoluto. */
     div[class*="st-key-fncard_"] {{
-        position: relative !important;
+        display: grid !important;
+        grid-template-columns: 1fr !important;
         padding: 0 !important;
-        /* Streamlit mete `gap` entre los hijos del bloque vertical del
-           container (aparte del margin de cada stElementContainer, que
-           ya se pone en 0 abajo). Si ese gap queda vivo, el contenedor
-           mide más alto que la card real -- y como el botón invisible
-           usa inset:0 sobre este mismo contenedor, ese sobrante de alto
-           es exactamente lo que antes se sentía como "el clic cae en la
-           flecha de abajo". */
-        gap: 0 !important;
     }}
     div[class*="st-key-fncard_"] [data-testid="stElementContainer"] {{
-        margin: 0 !important; padding: 0 !important;
-    }}
-    div[class*="st-key-fncard_"] .stMarkdown {{
-        margin: 0 !important; padding: 0 !important;
+        grid-column: 1 !important;
+        grid-row: 1 !important;
+        margin: 0 !important; padding: 0 !important; min-width: 0 !important;
     }}
     div[class*="st-key-fncard_"] .stButton {{
-        position: absolute !important; inset: 0 !important;
-        margin: 0 !important; padding: 0 !important; z-index: 5 !important;
+        z-index: 5 !important;
     }}
     div[class*="st-key-fncard_"] .stButton button {{
         width: 100% !important; height: 100% !important;
