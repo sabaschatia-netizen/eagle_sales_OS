@@ -168,22 +168,39 @@ def _col_inversion(r, ctx):
     return _pill_html(f"{pct:.0f}%", "_investment")
 
 
-def _col_cerrado(r, ctx):
+def _col_cerrado_usd(r, ctx):
+    """Columna 'Cerrado' de la tabla de Cierre en Ads -- pedido explícito
+    de Sabas: el monto en pesos se muestra convertido a USD, reusando la
+    misma tasa (dl.TASA_USD_ARS = 1450) que ya existía en el código para
+    inversion_ads_pct. El caso "pct" (cuando Checkout.Presupuesto viene
+    como % en vez de monto) no es una cifra de dinero -- se muestra tal
+    cual, sin conversión."""
     val = ctx["presupuesto_map"].get(r["Brand ID"])
     if val is None:
         return _celda_placeholder()
     tipo, monto = val
-    texto = f"{monto:.1f}%" if tipo == "pct" else f'${monto:,.0f}'.replace(",", ".")
+    if tipo == "pct":
+        texto = f"{monto:.1f}%"
+    else:
+        usd = monto / dl.TASA_USD_ARS
+        texto = f"${usd:,.0f}".replace(",", ".")
     return _pill_html(texto, "_closed")
 
 
 # Columnas extra por nivel del funnel -- solo aplican a Ads/Markdown
 # (pedido explícito de Sabas), nunca a Churn, que mantiene su tabla
-# original. Cada entrada: (encabezado, ancho_colgroup, función de celda).
+# original. Ahora se indexa por (tipo, nivel_key) en vez de solo
+# nivel_key: Sabas pidió explícito que MD.Cierre NO traiga columna extra
+# (siempre mostraba "s/d" ahí porque el presupuesto de Checkout es de
+# Ads, no de MD) -- solo GMV y Status para esa tabla puntual. El resto
+# de niveles (Contactado/Pipeline) se mantiene igual en las dos palancas.
 COLUMNAS_EXTRA = {
-    "contactado": ("Canal", "16%", _col_canal),
-    "pipeline": ("Inversión", "16%", _col_inversion),
-    "cierre": ("Cerrado", "16%", _col_cerrado),
+    ("ads", "contactado"): ("Canal", "16%", _col_canal),
+    ("md", "contactado"): ("Canal", "16%", _col_canal),
+    ("ads", "pipeline"): ("Inversión", "16%", _col_inversion),
+    ("md", "pipeline"): ("Inversión", "16%", _col_inversion),
+    ("ads", "cierre"): ("Cerrado (USD)", "16%", _col_cerrado_usd),
+    # ("md", "cierre") -- sin entrada a propósito.
 }
 
 
@@ -194,7 +211,7 @@ def tabla_lateral(df_tabla, titulo, nivel_key=None, ctx=None):
         st.markdown('<div class="tbl-box"></div>', unsafe_allow_html=True)
         return
 
-    extra = COLUMNAS_EXTRA.get(nivel_key) if ctx and ctx.get("tipo") in ("ads", "md") else None
+    extra = COLUMNAS_EXTRA.get((ctx.get("tipo"), nivel_key)) if ctx else None
 
     gmv_pill = PILL_STYLES["_gmv"]
     filas = []
