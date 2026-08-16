@@ -79,7 +79,7 @@ GOOGLE_FONTS_URL = "https://fonts.googleapis.com/css2?family=Poppins:wght@400;50
 
 
 def logo_img(width=64):
-    return f'<img src="data:image/png;base64,{EAGLE_LOGO_B64}" width="{width}" style="display:block;border-radius:8px;">'
+    return f'<img src="data:image/png;base64,{EAGLE_LOGO_B64}" width="{width}" style="display:block;">'
 
 
 def favicon():
