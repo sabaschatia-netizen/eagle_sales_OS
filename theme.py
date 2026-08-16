@@ -219,6 +219,14 @@ def build_css():
     div[class*="st-key-fncard_"] {{
         position: relative !important;
         padding: 0 !important;
+        /* Streamlit mete `gap` entre los hijos del bloque vertical del
+           container (aparte del margin de cada stElementContainer, que
+           ya se pone en 0 abajo). Si ese gap queda vivo, el contenedor
+           mide más alto que la card real -- y como el botón invisible
+           usa inset:0 sobre este mismo contenedor, ese sobrante de alto
+           es exactamente lo que antes se sentía como "el clic cae en la
+           flecha de abajo". */
+        gap: 0 !important;
     }}
     div[class*="st-key-fncard_"] [data-testid="stElementContainer"] {{
         margin: 0 !important; padding: 0 !important;

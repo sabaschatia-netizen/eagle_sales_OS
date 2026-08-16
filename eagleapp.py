@@ -65,10 +65,16 @@ def encontrar_datos():
 # Anchos de cada nivel del funnel -- se van angostando para reforzar la
 # forma de embudo (pedido explícito: "que se logren distinguir las barras
 # angostándose" / "es un funnel, los de abajo siempre son más pequeños").
-# Valores subidos a un escalón bien perceptible (cada nivel pierde ~20%
-# de ancho total respecto al anterior) -- con 7/14/21% el achicamiento
-# era demasiado sutil para notarse a simple vista.
-NIVEL_MARGENES = ["0%", "10%", "20%", "30%"]
+# Se expresa como ANCHO total del bloque (no como margen a cada lado):
+# el ancho se aplica al CONTENEDOR mismo (`st-key-fncard_*`), que es
+# también el ancestro posicionado del botón invisible -- así la card
+# visible y la zona de clic siempre miden EXACTAMENTE lo mismo, sea cual
+# sea el nivel. Un margen aplicado solo al HTML interno (como antes) no
+# angosta nada porque cada st.markdown/st.button de Streamlit cae en su
+# propio contenedor hermano en el DOM -- un <div> abierto en una llamada
+# se autocierra antes de que la siguiente llamada exista, así que nunca
+# llega a envolver la card de verdad.
+NIVEL_ANCHOS = ["100%", "80%", "60%", "40%"]
 
 
 def header(title, subtitle):
@@ -97,23 +103,35 @@ def _barra_html(segmentos):
     return f'<div class="fn-bar">{"".join(piezas)}</div>' if piezas else ""
 
 
-def card_nivel(nivel, margen, seleccionado, key):
+def card_nivel(nivel, ancho, seleccionado, key):
     """Card del funnel + botón invisible que la cubre entera -- así el
     clic y el hover son sobre el BLOQUE, no sobre la barra interna.
 
-    El botón vive DENTRO del mismo st.container que la card (no repartido
-    en llamadas sueltas de st.markdown), y se posiciona con
-    `position:absolute; inset:0` sobre ese contenedor -- así cubre la
-    card completa sea cual sea su alto real (con barra, sin barra, con
-    más o menos segmentos), sin necesidad de adivinar una altura fija en
-    píxeles. Antes se usaba un margin-top negativo calculado a mano, que
-    dejaba un resto de caja visible cuando la card medía distinto de lo
-    calculado."""
+    El botón vive DENTRO del mismo st.container que la card, y se
+    posiciona con `position:absolute; inset:0` sobre ese contenedor --
+    así cubre la card completa sea cual sea su alto real (con barra, sin
+    barra, con más o menos segmentos), sin necesidad de adivinar una
+    altura fija en píxeles.
+
+    El angostamiento por nivel (`ancho`) se aplica con UNA sola regla
+    CSS dirigida al contenedor mismo (`st-key-fncard_{key}`), inyectada
+    en la MISMA llamada a st.markdown que dibuja la card -- no en una
+    llamada aparte. Esto importa por dos razones a la vez:
+      1) Es lo que de verdad angosta la card (un <div> "wrapper" abierto
+         en una llamada de markdown separada se autocierra antes de la
+         siguiente llamada y nunca llega a envolver nada).
+      2) Como el botón absoluto usa `inset:0` sobre ESE MISMO contenedor,
+         angostar el contenedor angosta también, automáticamente, la
+         zona de clic -- así el clic queda ceñido a la card visible y no
+         se derrama sobre el espacio vecino (donde antes caía la flecha).
+    """
     barra = _barra_html(nivel["segmentos"])
     sel_cls = " is-sel" if seleccionado else ""
     with st.container(key=f"fncard_{key}"):
-        st.markdown(f'<div style="margin:0 {margen};">', unsafe_allow_html=True)
         st.markdown(
+            f'<style>div[class*="st-key-fncard_{key}"] {{'
+            f"width:{ancho} !important; margin-left:auto !important; margin-right:auto !important;"
+            f"}}</style>"
             f'<div class="fn-card{sel_cls}">'
             f'<div class="fn-title">{nivel["titulo"]}</div>'
             f'<div><span class="fn-total">{nivel["total"]}</span>'
@@ -122,7 +140,6 @@ def card_nivel(nivel, margen, seleccionado, key):
             unsafe_allow_html=True,
         )
         clic = st.button(" ", key=f"btn_{key}", use_container_width=True)
-        st.markdown("</div>", unsafe_allow_html=True)
     return clic
 
 
@@ -165,8 +182,8 @@ def render_funnel(niveles, prefijo, nota_loop=None):
                 st.markdown('<div class="fn-arrow">↓</div>', unsafe_allow_html=True)
             if nota_loop and nivel["key"] == "cierre":
                 st.markdown(f'<div class="fn-note">{nota_loop}</div>', unsafe_allow_html=True)
-            margen = NIVEL_MARGENES[min(i, len(NIVEL_MARGENES) - 1)]
-            if card_nivel(nivel, margen, st.session_state[sel_key] == nivel["key"], f"{prefijo}_{nivel['key']}"):
+            ancho = NIVEL_ANCHOS[min(i, len(NIVEL_ANCHOS) - 1)]
+            if card_nivel(nivel, ancho, st.session_state[sel_key] == nivel["key"], f"{prefijo}_{nivel['key']}"):
                 st.session_state[sel_key] = nivel["key"]
                 st.rerun()
 
