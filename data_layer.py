@@ -331,48 +331,78 @@ COLS_TRIAGE = ["Brand ID", "Brand Name", "GMV", "Status"]
 UMBRAL_CALIENTE_HABILES = 3
 UMBRAL_RECHAZO_HABILES = 5
 
+# 1 USD = 1450 ARS -- pedido explícito de Sabas para convertir el GMV
+# (que la tabla siempre muestra en USD) a ARS, que es la moneda en la
+# que vienen los rangos de la hoja RECOMMENDED BUDGETS.
+TASA_USD_ARS = 1450
+
+
+def _canal_desde_medio(medio):
+    """Traduce el 'Medio de Contacto' crudo de Productivity a uno de los
+    3 canales que pide la tabla de Contactados. En la fuente real solo
+    aparecen dos valores -- 'Amazon Connect' (el link cae en
+    connect.aws, o sea llamada telefónica) y 'Treble' (link cae en
+    sales.treble.ai, la plataforma de WhatsApp Business que usa el
+    equipo) -- no hay un tercer valor para correo. Se asume Gmail como
+    canal por defecto para cualquier contacto sin uno de esos dos medios
+    (registro sin 'Medio de Contacto' o con un valor distinto)."""
+    if medio == "Amazon Connect":
+        return "Llamada"
+    if medio == "Treble":
+        return "WhatsApp"
+    return "Gmail"
+
 
 def _clasificar_marca(key, nombre, gmv, marca_prod, es_cierre, col_señal, hoy):
-    """Devuelve (nivel1, nivel2, nivel3) para una marca. nivel2/nivel3
-    quedan en None si la marca no llega a ese nivel."""
-    if es_cierre:
-        return "Contactado", "Pipeline", "Cierre"
-
-    if marca_prod.empty:
-        return "Sin Gestionar", None, None
-
+    """Devuelve (nivel1, nivel2, nivel3, canal) para una marca. nivel2,
+    nivel3 y canal quedan en None si la marca no llega a ese nivel o no
+    tiene un contacto real de la palanca del que sacar el canal."""
     contacto_palanca = marca_prod[
         (marca_prod["¿Contactado?"] == "SI") & (marca_prod[col_señal] == "SI")
-    ]
+    ] if not marca_prod.empty else marca_prod
+
+    canal, fecha_inicio = None, None
     if not contacto_palanca.empty:
-        fecha_inicio = contacto_palanca["Date"].min()
+        cp_ord = contacto_palanca.sort_values("Date")
+        fecha_inicio = cp_ord["Date"].min()
+        primer_medio = cp_ord.iloc[0].get("Medio de Contacto") if "Medio de Contacto" in cp_ord.columns else None
+        canal = _canal_desde_medio(primer_medio)
+
+    if es_cierre:
+        return "Contactado", "Pipeline", "Cierre", canal or "Gmail"
+
+    if marca_prod.empty:
+        return "Sin Gestionar", None, None, None
+
+    if not contacto_palanca.empty:
         dias = dias_habiles_entre(fecha_inicio, hoy) or 0
         tiene_no_activo = (marca_prod.get("Tipo Never Ads") == "No activo").any() \
             if "Tipo Never Ads" in marca_prod.columns else False
         if tiene_no_activo and dias > UMBRAL_RECHAZO_HABILES:
-            return "Contactado", "Rechazado", None
+            return "Contactado", "Rechazado", None, canal
         nivel3 = "Caliente" if dias <= UMBRAL_CALIENTE_HABILES else "Frío"
-        return "Contactado", "Pipeline", nivel3
+        return "Contactado", "Pipeline", nivel3, canal
 
     if (marca_prod["¿Contactado?"] == "NO").any():
-        return "No Contactado", None, None
+        return "No Contactado", None, None, None
 
-    return "Sin Gestionar", None, None
+    return "Sin Gestionar", None, None, None
 
 
 def _construir_funnel(universo_keys, nombre_map, gmv_map, cierre_keys, prod_farmer, col_señal, hoy):
     filas = []
     for key in universo_keys:
         marca_prod = prod_farmer[prod_farmer["brand_key"] == key]
-        n1, n2, n3 = _clasificar_marca(
+        n1, n2, n3, canal = _clasificar_marca(
             key, nombre_map.get(key, key), gmv_map.get(key, 0.0),
             marca_prod, key in cierre_keys, col_señal, hoy,
         )
         filas.append({
             "Brand ID": key, "Brand Name": nombre_map.get(key, key),
             "GMV": gmv_map.get(key, 0.0), "N1": n1, "N2": n2, "N3": n3,
+            "Canal": canal,
         })
-    df = pd.DataFrame(filas, columns=["Brand ID", "Brand Name", "GMV", "N1", "N2", "N3"])
+    df = pd.DataFrame(filas, columns=["Brand ID", "Brand Name", "GMV", "N1", "N2", "N3", "Canal"])
     return df.sort_values("GMV", ascending=False).reset_index(drop=True)
 
 
@@ -406,6 +436,9 @@ def funnel_niveles(df):
         Status=lambda d: d["N2"].fillna("Pipeline"))
     pipe_tbl = df[df["N3"].isin(["Caliente", "Frío"])].assign(Status=df["N3"])
     cierre_tbl = df[df["N3"] == "Cierre"].assign(Status="Cerrado")
+    # Inversión (Pipeline) y Cerrado (Cierre) se resuelven en la UI --
+    # ahí es donde se sabe si esta tabla es de Ads o de Markdown y se
+    # tienen a mano los rangos de RECOMMENDED BUDGETS y el %CVR.
 
     return [
         {
@@ -445,7 +478,7 @@ def funnel_ads(ads_df, productivity_df, checkout_df, farmer_email, gmv_map=None,
 
     d = ads_df.copy()
     if d.empty or "BRAND" not in d.columns:
-        return pd.DataFrame(columns=["Brand ID", "Brand Name", "GMV", "N1", "N2", "N3"])
+        return pd.DataFrame(columns=["Brand ID", "Brand Name", "GMV", "N1", "N2", "N3", "Canal"])
     d["brand_key"] = d["BRAND"].apply(_brand_key)
     d["att_pct"] = d["% Att. Bookings"].apply(_parse_pct)
     califican = d[(d["att_pct"] == 0) & (d["brand_key"] != "")]
@@ -468,7 +501,7 @@ def funnel_md(md_df, productivity_df, checkout_df, farmer_email, gmv_map=None, u
 
     d = md_df.copy()
     if d.empty or "BRAND ID" not in d.columns:
-        return pd.DataFrame(columns=["Brand ID", "Brand Name", "GMV", "N1", "N2", "N3"])
+        return pd.DataFrame(columns=["Brand ID", "Brand Name", "GMV", "N1", "N2", "N3", "Canal"])
     d["brand_key"] = d["BRAND ID"].apply(_brand_key)
     d["md_pct"] = d["MARKDOWN %"].apply(_parse_pct)
     califican = d[(d["md_pct"].isna() | (d["md_pct"] == 0)) & (d["brand_key"] != "")]
@@ -568,3 +601,205 @@ def funnel_churn_niveles(df):
             "tabla": df[df["N2"] == "Se reactiva"].assign(Status="Se reactiva"),
         },
     ]
+
+
+# ═════════════════════════════════════════════════════════════
+# INVERSIÓN RECOMENDADA (Pipeline) y % CERRADO (Cierre)
+# ═════════════════════════════════════════════════════════════
+# Pedido explícito de Sabas: en la tabla de Pipeline, columna "Inversión"
+# con el % recomendado según la hoja RECOMMENDED BUDGETS -- para Ads,
+# por el GMV convertido a ARS (la tabla lo muestra en USD); para
+# Markdown, por el %CVR de la hoja %CVR. En la tabla de Cierre, columna
+# "Cerrado" con el % cerrado según la columna Presupuesto de Checkout,
+# venga como % o como $.
+
+def _parse_rango(texto):
+    """'<145000' / '145000 - 725000' / '> 7250000' / '<10%' / '10% - 15 %'
+    -> (lo, lo_incl, hi, hi_incl). None en lo/hi = sin piso/techo."""
+    s = str(texto).strip()
+    if s.startswith("<"):
+        hi = float(re.sub(r"[^\d.,]", "", s).replace(",", "."))
+        return None, False, hi, False
+    if s.startswith(">"):
+        lo = float(re.sub(r"[^\d.,]", "", s).replace(",", "."))
+        return lo, False, None, False
+    if "-" in s:
+        izq, der = s.split("-", 1)
+        lo = float(re.sub(r"[^\d.,]", "", izq).replace(",", "."))
+        hi = float(re.sub(r"[^\d.,]", "", der).replace(",", "."))
+        return lo, True, hi, True
+    return None, False, None, False
+
+
+def _pct_por_rango(valor, rangos):
+    """`rangos`: lista de (lo, lo_incl, hi, hi_incl, pct). Devuelve el
+    pct del primer rango que contiene `valor`, o None si no calza en
+    ninguno (valor NaN/None, o tabla de rangos vacía)."""
+    if valor is None or (isinstance(valor, float) and pd.isna(valor)):
+        return None
+    for lo, lo_incl, hi, hi_incl, pct in rangos:
+        ok_lo = lo is None or (valor >= lo if lo_incl else valor > lo)
+        ok_hi = hi is None or (valor <= hi if hi_incl else valor < hi)
+        if ok_lo and ok_hi:
+            return pct
+    return None
+
+
+def load_recommended_budgets(file_like_or_path):
+    """Lee la hoja 'RECOMMENDED BUDGETS' -- dos tablas apiladas en las
+    mismas 2 columnas: rangos de ARS$ VENTAS -> % recomendado (Ads), y
+    rangos de %CVR -> % recomendado (Markdown), separadas por una fila
+    con el encabezado real de la segunda tabla ('%CVR'). Devuelve
+    (rangos_ads, rangos_md), cada uno listo para _pct_por_rango. Si la
+    hoja no existe o no calza el formato esperado, devuelve ([], [])
+    -- nunca revienta la app."""
+    try:
+        xls = pd.ExcelFile(file_like_or_path) if not isinstance(file_like_or_path, pd.ExcelFile) else file_like_or_path
+        lower_map = {name.strip().lower(): name for name in xls.sheet_names}
+        real_name = lower_map.get("recommended budgets")
+        if not real_name:
+            return [], []
+        raw = pd.read_excel(xls, sheet_name=real_name, header=None)
+    except (OSError, ValueError, KeyError):
+        return [], []
+
+    split_idx = None
+    for i, val in enumerate(raw[0]):
+        if isinstance(val, str) and val.strip() == "%CVR":
+            split_idx = i
+            break
+
+    rangos_ads, rangos_md = [], []
+    tabla1 = raw.iloc[1:split_idx] if split_idx is not None else raw.iloc[1:]
+    for _, row in tabla1.iterrows():
+        rango, pct = row[0], row[1]
+        if pd.isna(rango) or pd.isna(pct):
+            continue
+        lo, lo_incl, hi, hi_incl = _parse_rango(rango)
+        rangos_ads.append((lo, lo_incl, hi, hi_incl, float(pct) * 100))
+
+    if split_idx is not None:
+        tabla2 = raw.iloc[split_idx + 1:]
+        for _, row in tabla2.iterrows():
+            rango, pct = row[0], row[1]
+            if pd.isna(rango) or pd.isna(pct):
+                continue
+            lo, lo_incl, hi, hi_incl = _parse_rango(rango)
+            rangos_md.append((lo, lo_incl, hi, hi_incl, float(pct) * 100))
+
+    return rangos_ads, rangos_md
+
+
+def inversion_ads_pct(gmv_usd, rangos_ads, tasa_ars=TASA_USD_ARS):
+    """% de inversión recomendado para Ads: el GMV (USD, como lo muestra
+    la tabla) se convierte a ARS -- moneda de los rangos de la hoja --
+    y se ubica en el rango que corresponda."""
+    if gmv_usd is None:
+        return None
+    return _pct_por_rango(float(gmv_usd) * tasa_ars, rangos_ads)
+
+
+def inversion_md_pct(cvr_pct, rangos_md):
+    """% de inversión recomendado para Markdown, según el %CVR de la
+    marca (ya expresado como porcentaje, ej. 17.81)."""
+    return _pct_por_rango(cvr_pct, rangos_md)
+
+
+def nombre_md_lookup(md_df):
+    """{brand_key: nombre crudo (sin ID)} desde MD.BRAND NAME -- MD es la
+    única hoja del cruce cuyo nombre de marca coincide, tal cual, con
+    los nombres que trae la hoja %CVR (que no incluye Brand ID)."""
+    d = md_df.copy()
+    if d.empty or "BRAND ID" not in d.columns or "BRAND NAME" not in d.columns:
+        return {}
+    d["brand_key"] = d["BRAND ID"].apply(_brand_key)
+    return dict(zip(d["brand_key"], d["BRAND NAME"]))
+
+
+def _norm_nombre(s):
+    return re.sub(r"\s+", " ", str(s)).strip().lower()
+
+
+def cvr_lookup(cvr_df):
+    """Lee la hoja '%CVR' -- export crudo cuyo encabezado real
+    (Métrica | Brand Name | Valor | vs LM) vive en la primera fila de
+    datos, no en el header de pandas. Devuelve {nombre_normalizado:
+    %CVR} (ej. 0.1781 -> 17.81)."""
+    d = cvr_df
+    if d is None or d.empty or d.shape[1] < 3:
+        return {}
+    cols = list(d.columns)
+    nombre_col, valor_col = cols[1], cols[2]
+    out = {}
+    for _, row in d.iloc[1:].iterrows():
+        nombre, valor = row.get(nombre_col), row.get(valor_col)
+        if pd.isna(nombre) or pd.isna(valor):
+            continue
+        try:
+            out[_norm_nombre(nombre)] = float(valor) * 100
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def load_cvr(file_like_or_path):
+    """Lee la hoja '%CVR' del cruce por nombre (case-insensitive). Hoja
+    ausente -> DataFrame vacío, no revienta."""
+    try:
+        xls = pd.ExcelFile(file_like_or_path) if not isinstance(file_like_or_path, pd.ExcelFile) else file_like_or_path
+        lower_map = {name.strip().lower(): name for name in xls.sheet_names}
+        real_name = lower_map.get("%cvr")
+        if not real_name:
+            return pd.DataFrame()
+        return pd.read_excel(xls, sheet_name=real_name)
+    except (OSError, ValueError, KeyError):
+        return pd.DataFrame()
+
+
+def cvr_por_brand_key(md_df, cvr_df):
+    """{brand_key: %CVR} combinando el nombre crudo de MD con el valor de
+    la hoja %CVR -- puente entre las dos hojas, que no comparten Brand ID."""
+    nombre_map = nombre_md_lookup(md_df)
+    cvr_map = cvr_lookup(cvr_df)
+    return {key: cvr_map.get(_norm_nombre(nombre)) for key, nombre in nombre_map.items()}
+
+
+def presupuesto_pct(valor_crudo, gmv_usd, tasa_ars=TASA_USD_ARS):
+    """'Presupuesto' de Checkout puede venir ya como % (se usa tal cual)
+    o como monto en $ ARS (se convierte a % del GMV -- mismo criterio de
+    conversión que Inversión) -- pedido explícito: 'sin importar si es
+    % o $'."""
+    if pd.isna(valor_crudo):
+        return None
+    s = str(valor_crudo).strip()
+    if not s:
+        return None
+    if "%" in s:
+        return _parse_pct(s)
+    monto = _parse_money(s)
+    if not gmv_usd:
+        return None
+    gmv_ars = float(gmv_usd) * tasa_ars
+    if gmv_ars <= 0:
+        return None
+    return monto / gmv_ars * 100
+
+
+def presupuesto_pct_por_brand(checkout_df, farmer_email, gmv_map, tasa_ars=TASA_USD_ARS):
+    """{brand_key: % cerrado} desde Checkout.Presupuesto para este
+    Account Manager. Con más de una fila de Checkout por marca, se
+    queda con la más reciente (ordenado por Fecha antes de recorrer)."""
+    chk = checkout_df
+    gmv_map = gmv_map or {}
+    if chk is None or chk.empty or not {"FARMER", "brand_key", "Presupuesto"}.issubset(chk.columns):
+        return {}
+    sub = chk[chk["FARMER"] == farmer_email]
+    if "Fecha" in sub.columns:
+        sub = sub.sort_values("Fecha")
+    out = {}
+    for _, row in sub.iterrows():
+        key = row["brand_key"]
+        pct = presupuesto_pct(row.get("Presupuesto"), gmv_map.get(key, 0.0), tasa_ars)
+        if pct is not None:
+            out[key] = pct
+    return out

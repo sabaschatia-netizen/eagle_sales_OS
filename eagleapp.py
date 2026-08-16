@@ -143,34 +143,89 @@ def card_nivel(nivel, ancho, seleccionado, key):
     return clic
 
 
-def tabla_lateral(df_tabla, titulo):
+def _pill_html(texto, style_key):
+    est = PILL_STYLES.get(style_key, PILL_STYLES["_default"])
+    return f'<span class="eagle-badge" style="background:{est["bg"]};color:{est["fg"]};">{texto}</span>'
+
+
+def _celda_placeholder():
+    return f'<span class="eagle-badge" style="background:{COLORS["panel_2"]};color:{COLORS["muted"]};">s/d</span>'
+
+
+def _col_canal(r, ctx):
+    canal = r.get("Canal")
+    return _pill_html(canal, canal) if canal else _celda_placeholder()
+
+
+def _col_inversion(r, ctx):
+    key = r["Brand ID"]
+    if ctx["tipo"] == "ads":
+        pct = dl.inversion_ads_pct(r["GMV"], ctx["rangos_ads"])
+    else:
+        pct = dl.inversion_md_pct(ctx["cvr_map"].get(key), ctx["rangos_md"])
+    if pct is None:
+        return _celda_placeholder()
+    return _pill_html(f"{pct:.0f}%", "_investment")
+
+
+def _col_cerrado(r, ctx):
+    pct = ctx["presupuesto_map"].get(r["Brand ID"])
+    if pct is None:
+        return _celda_placeholder()
+    return _pill_html(f"{pct:.1f}%", "_closed")
+
+
+# Columnas extra por nivel del funnel -- solo aplican a Ads/Markdown
+# (pedido explícito de Sabas), nunca a Churn, que mantiene su tabla
+# original. Cada entrada: (encabezado, ancho_colgroup, función de celda).
+COLUMNAS_EXTRA = {
+    "contactado": ("Canal", "16%", _col_canal),
+    "pipeline": ("Inversión", "16%", _col_inversion),
+    "cierre": ("Cerrado", "16%", _col_cerrado),
+}
+
+
+def tabla_lateral(df_tabla, titulo, nivel_key=None, ctx=None):
     st.markdown(f"##### Marcas en: {titulo}")
     st.caption(f"{len(df_tabla)} marca(s) — ordenadas de mayor a menor GMV.")
     if not len(df_tabla):
         st.markdown('<div class="tbl-box"></div>', unsafe_allow_html=True)
         return
 
+    extra = COLUMNAS_EXTRA.get(nivel_key) if ctx and ctx.get("tipo") in ("ads", "md") else None
+
     gmv_pill = PILL_STYLES["_gmv"]
     filas = []
     for _, r in df_tabla.iterrows():
         est = PILL_STYLES.get(r["Status"], PILL_STYLES["_default"])
         gmv = f'${r["GMV"]:,.0f}'.replace(",", ".")
+        celda_extra = f"<td>{extra[2](r, ctx)}</td>" if extra else ""
         filas.append(
             f'<tr><td>{r["Brand ID"]}</td><td>{r["Brand Name"]}</td>'
             f'<td><span class="eagle-badge" style="background:{gmv_pill["bg"]};color:{gmv_pill["fg"]};">{gmv}</span></td>'
-            f'<td><span class="eagle-badge" style="background:{est["bg"]};color:{est["fg"]};">{r["Status"]}</span></td></tr>'
+            f'<td><span class="eagle-badge" style="background:{est["bg"]};color:{est["fg"]};">{r["Status"]}</span></td>'
+            f'{celda_extra}</tr>'
         )
+
+    if extra:
+        header_extra, ancho_extra, _ = extra
+        anchos = ["14%", "36%", "16%", "18%", ancho_extra]
+        thead = f"<th>Brand ID</th><th>Brand Name</th><th>GMV</th><th>Status</th><th>{header_extra}</th>"
+    else:
+        anchos = ["16%", "44%", "18%", "22%"]
+        thead = "<th>Brand ID</th><th>Brand Name</th><th>GMV</th><th>Status</th>"
+
+    colgroup = "".join(f'<col style="width:{a}">' for a in anchos)
     st.markdown(
         '<div class="tbl-box"><table class="eagle-pill-table">'
-        '<colgroup><col style="width:16%"><col style="width:44%">'
-        '<col style="width:18%"><col style="width:22%"></colgroup>'
-        "<thead><tr><th>Brand ID</th><th>Brand Name</th><th>GMV</th><th>Status</th></tr></thead>"
+        f"<colgroup>{colgroup}</colgroup>"
+        f"<thead><tr>{thead}</tr></thead>"
         f'<tbody>{"".join(filas)}</tbody></table></div>',
         unsafe_allow_html=True,
     )
 
 
-def render_funnel(niveles, prefijo, nota_loop=None):
+def render_funnel(niveles, prefijo, nota_loop=None, ctx=None):
     sel_key = f"sel_{prefijo}"
     st.session_state.setdefault(sel_key, niveles[0]["key"])
 
@@ -189,7 +244,7 @@ def render_funnel(niveles, prefijo, nota_loop=None):
 
     with col_tb:
         actual = next((n for n in niveles if n["key"] == st.session_state[sel_key]), niveles[0])
-        tabla_lateral(actual["tabla"], actual["titulo"])
+        tabla_lateral(actual["tabla"], actual["titulo"], actual["key"], ctx)
 
 
 # ── SIDEBAR ────────────────────────────────────────────────────
@@ -260,6 +315,18 @@ f_ads = dl.funnel_ads(hojas["ads"], productivity, checkout, am, gmv_map, dl.univ
 f_md = dl.funnel_md(hojas["md"], productivity, checkout, am, gmv_map, dl.universo_mensual_path("md"))
 f_churn = dl.funnel_churn(hojas["churn"], productivity, am, gmv_map)
 
+# Inversión (Pipeline) y Cerrado (Cierre) -- rangos de RECOMMENDED
+# BUDGETS, %CVR por marca y % cerrado de Checkout.Presupuesto, todo
+# resuelto una sola vez acá y pasado como contexto a cada tabla.
+rangos_ads, rangos_md = dl.load_recommended_budgets(ruta_datos)
+cvr_map = dl.cvr_por_brand_key(hojas["md"], dl.load_cvr(ruta_datos))
+presupuesto_map = dl.presupuesto_pct_por_brand(checkout, am, gmv_map)
+
+ctx_ads = {"tipo": "ads", "rangos_ads": rangos_ads, "rangos_md": rangos_md,
+           "cvr_map": cvr_map, "presupuesto_map": presupuesto_map}
+ctx_md = {"tipo": "md", "rangos_ads": rangos_ads, "rangos_md": rangos_md,
+          "cvr_map": cvr_map, "presupuesto_map": presupuesto_map}
+
 NOTA_LOOP = ("↻ Vence el bucket (>5 días hábiles con never-ads) → regresa a "
              "<b>Contactados</b>, marcado como rechazado")
 
@@ -267,13 +334,13 @@ tab_ads, tab_md, tab_churn = st.tabs(["🚀 Ads (Never Ads)", "🏷️ Markdown"
 
 with tab_ads:
     if len(f_ads):
-        render_funnel(dl.funnel_niveles(f_ads), "ads", NOTA_LOOP)
+        render_funnel(dl.funnel_niveles(f_ads), "ads", NOTA_LOOP, ctx_ads)
     else:
         st.caption("Sin datos de ADS para calcular el universo.")
 
 with tab_md:
     if len(f_md):
-        render_funnel(dl.funnel_niveles(f_md), "md", NOTA_LOOP)
+        render_funnel(dl.funnel_niveles(f_md), "md", NOTA_LOOP, ctx_md)
     else:
         st.caption("Sin datos de MD para calcular el universo.")
 

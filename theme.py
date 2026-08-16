@@ -55,24 +55,56 @@ SEGMENT_COLORS = {
     "Retenido":          {"bg": "#CDF43D", "dark": True},
 }
 
-# Pills pastel (referencia de Sabas: redondeadas, fondo pastel, texto del
-# mismo tono pero oscuro para que se lea).
+def _darken(hex_color, factor):
+    """Oscurece un hex manteniendo el matiz (multiplica cada canal RGB
+    por `factor`, sin tocar la saturación)."""
+    hex_color = hex_color.lstrip("#")
+    r, g, b = (int(hex_color[i:i + 2], 16) for i in (0, 2, 4))
+    r, g, b = (max(0, min(255, int(c * factor))) for c in (r, g, b))
+    return f"#{r:02x}{g:02x}{b:02x}"
+
+
+# Pills con los colores EXACTOS de la paleta (pedido explícito de Sabas:
+# "se ven muy opacas, hagamoslas con los colores exactos que
+# correspondan de la paleta y que sea mas oscura la pill y el tono claro
+# en las letras internas"). Violeta y coral ya son lo bastante oscuros
+# para llevar texto blanco tal cual; violeta claro, crema y lima son
+# demasiado claros para eso, así que se oscurecen manteniendo el mismo
+# matiz de la referencia -- nunca se inventa un color nuevo.
+_PV = COLORS["violeta"]                      # #674FD3 -- ya oscuro
+_PVC = _darken(COLORS["violeta_claro"], 0.62)  # #9885E0 -> #5e528a
+_PC = _darken(COLORS["crema"], 0.5)            # #F0EBD7 -> #78756a
+_PL = _darken(COLORS["lima"], 0.55)            # #CDF43D -> #708621
+_PCO = _darken(COLORS["coral"], 0.88)          # #F4743C -> #d66634 (naranja)
+_PCO_ROJO = _darken(COLORS["coral"], 0.72)     # #F4743C -> #af522b (rojo)
+_PW = COLORS["white"]
+
 PILL_STYLES = {
-    "Contactado":        {"bg": "#EEEAFB", "fg": "#4A37A0"},
-    "No Contactado":     {"bg": "#F3F0FC", "fg": "#6E5CB8"},
-    "Sin Gestionar":     {"bg": "#F7F4EA", "fg": "#8A7B52"},
-    "Pipeline":          {"bg": "#F2FBD5", "fg": "#5F8207"},
-    "Rechazado":         {"bg": "#FDE9E1", "fg": "#C4491A"},
-    "Caliente":          {"bg": "#FDE9E1", "fg": "#C4491A"},
-    "Frío":              {"bg": "#F3F0FC", "fg": "#6E5CB8"},
-    "Cerrado":           {"bg": "#F2FBD5", "fg": "#5F8207"},
-    "Se reactiva":       {"bg": "#F2FBD5", "fg": "#5F8207"},
-    "Cerrado permanente": {"bg": "#FDE9E1", "fg": "#C4491A"},
-    "PW1":               {"bg": "#F3F0FC", "fg": "#6E5CB8"},
-    "Churn":             {"bg": "#FDE9E1", "fg": "#C4491A"},
-    "Retenido":          {"bg": "#F2FBD5", "fg": "#5F8207"},
-    "_gmv":              {"bg": "#F2FBD5", "fg": "#5F8207"},
-    "_default":          {"bg": "#F3F1F9", "fg": "#6E6885"},
+    "Contactado":         {"bg": _PV,  "fg": _PW},
+    "No Contactado":      {"bg": _PVC, "fg": _PW},
+    "Sin Gestionar":      {"bg": _PC,  "fg": _PW},
+    "Pipeline":           {"bg": _PL,  "fg": _PW},
+    "Rechazado":          {"bg": _PCO, "fg": _PW},
+    "Caliente":           {"bg": _PCO, "fg": _PW},
+    "Frío":               {"bg": _PVC, "fg": _PW},
+    "Cerrado":            {"bg": _PL,  "fg": _PW},
+    "Se reactiva":        {"bg": _PL,  "fg": _PW},
+    "Cerrado permanente": {"bg": _PCO, "fg": _PW},
+    "PW1":                {"bg": _PVC, "fg": _PW},
+    "Churn":              {"bg": _PCO, "fg": _PW},
+    "Retenido":           {"bg": _PL,  "fg": _PW},
+
+    # Canal de contacto (tabla Contactados) -- pedido explícito: Gmail
+    # roja, WhatsApp verde, Llamada naranja.
+    "Gmail":              {"bg": _PCO_ROJO, "fg": _PW},
+    "WhatsApp":           {"bg": _PL,       "fg": _PW},
+    "Llamada":            {"bg": _PCO,      "fg": _PW},
+
+    # Columnas numéricas
+    "_gmv":               {"bg": _PL,  "fg": _PW},
+    "_investment":        {"bg": _PVC, "fg": _PW},
+    "_closed":            {"bg": _PL,  "fg": _PW},
+    "_default":           {"bg": COLORS["muted"], "fg": _PW},
 }
 
 GOOGLE_FONTS_URL = "https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&display=swap"
