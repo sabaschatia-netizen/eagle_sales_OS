@@ -509,6 +509,30 @@ def funnel_ads(ads_df, productivity_df, checkout_df, farmer_email, gmv_map=None,
     if not chk.empty and {"FARMER", "Tipo de Contratacion", "brand_key"}.issubset(chk.columns):
         cierre_keys = set(chk[chk["FARMER"] == farmer_email]["brand_key"])
 
+    # BUG REAL ENCONTRADO (pedido explícito de Sabas: "no me está dando
+    # los datos reales" -- Checkout tenía 14 cierres reales, el funnel
+    # solo mostraba 2). Causa: el universo se arma SOLO con marcas que
+    # en este momento tienen % Att. Bookings == 0. Una marca que cierra
+    # empieza a atribuir de verdad -- su % deja de ser 0 casi por
+    # definición -- así que sale del filtro crudo justo cuando más
+    # importa que se quede. El "universo acumulado" en disco existía
+    # para blindar esto, pero es un archivo local efímero (se puede
+    # perder en cualquier redeploy de Streamlit Cloud, ya avisado en el
+    # README) -- si se pierde, la marca desaparece de la iteración
+    # completa y ni siquiera llega a compararse contra Checkout.
+    # FIX: cualquier marca que SÍ cerró (aparece en Checkout, la fuente
+    # de verdad, que se lee fresca del Excel cada vez, no depende de
+    # ningún archivo persistido) entra al universo sin importar si el
+    # acumulado la tiene o qué diga su % de hoy. El nombre, si no está
+    # en nombre_map, se busca en la propia hoja ADS completa (sin
+    # filtrar por %) como respaldo.
+    faltantes = cierre_keys - set(nombre_map.keys())
+    if faltantes:
+        nombre_ads_completo = dict(zip(d["brand_key"], d["BRAND"]))
+        nombre_prod = dict(zip(prod["brand_key"], prod["Brand"])) if "Brand" in prod.columns else {}
+        for k in faltantes:
+            nombre_map[k] = nombre_ads_completo.get(k) or nombre_prod.get(k) or k
+
     return _construir_funnel(sorted(nombre_map), nombre_map, gmv_map, cierre_keys, prod, "Ads", hoy)
 
 
@@ -530,6 +554,18 @@ def funnel_md(md_df, productivity_df, checkout_df, farmer_email, gmv_map=None, u
 
     # Cierre de MD: la aceptación vive en Productivity, no en Checkout.
     cierre_keys = set(prod[prod["¿Se aceptó lo ofrecido?"] == "Sí"]["brand_key"])
+
+    # Mismo blindaje que funnel_ads (ver esa función para el detalle
+    # completo del bug): una marca que acepta MD probablemente deja de
+    # tener Markdown % en 0/vacío, así que puede caer fuera del filtro
+    # crudo justo al cerrar. Se garantiza que entre igual, con el nombre
+    # de respaldo desde la propia hoja MD completa.
+    faltantes = cierre_keys - set(nombre_map.keys())
+    if faltantes:
+        nombre_md_completo = dict(zip(d["brand_key"], d["BRAND NAME"]))
+        nombre_prod = dict(zip(prod["brand_key"], prod["Brand"])) if "Brand" in prod.columns else {}
+        for k in faltantes:
+            nombre_map[k] = nombre_md_completo.get(k) or nombre_prod.get(k) or k
 
     return _construir_funnel(sorted(nombre_map), nombre_map, gmv_map, cierre_keys, prod, "Markdown", hoy)
 
