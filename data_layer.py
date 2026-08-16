@@ -1,25 +1,19 @@
 """
 Eagle — capa de datos.
 
-Lee el export "cruce" que ya vienes generando (Productivity + Checkout en
-un mismo Excel, 2 hojas) y calcula los 3 funnels (Ads/Never Ads, Markdown,
-Churn) con las mismas reglas que validamos a mano sobre CRUCE_PRO_SALES.xlsx
-en la sesión de estudio.
+Lee el export "cruce" (5 hojas: PRODUCTIVITY, CHECKOUT, ADS, CHURN, MD) y
+calcula el TABLERO DE TRIAGE por palanca (Ads, Markdown, Churn) -- no un
+funnel de conversión, sino una clasificación mutuamente excluyente de
+toda la cartera elegible en un momento dado, con el reloj corriendo
+contra la fecha real de HOY (no contra la ventana del Excel), porque el
+archivo se actualiza a diario y el sistema mide en vivo.
 
-Formato esperado del Excel (2 hojas, nombres no importan -- se toman por
-posición: la primera hoja más ancha es Productivity, la segunda es
-Checkout):
+Formato esperado del Excel, 5 hojas leídas POR NOMBRE (case-insensitive):
+  PRODUCTIVITY, CHECKOUT, ADS, CHURN, MD
 
-  Hoja "Productivity" (~55 columnas), las que usa Eagle:
-    Date, Farmer, Code, Brand, Tipo Ads, Tipo Never Ads,
-    Campaña Ofrecida, ¿Se aceptó lo ofrecido?,
-    Churn, Bucket Churn, Motivo Churn, On Hold, Fecha Reactivación
-
-  Hoja "Checkout" (~9 columnas):
-    Fecha, FARMER, Brand ID, Tipo de Contratacion, Coinversion, Presupuesto
-
-Todas las funciones reciben el DataFrame ya cargado -- no leen el disco
-directamente, así la UI decide si viene de upload o de un archivo local.
+Todas las funciones reciben los DataFrames ya cargados -- no leen el
+disco directamente, así la UI decide si viene de upload o de un archivo
+local.
 """
 
 import re
@@ -31,46 +25,87 @@ import pandas as pd
 # CARGA
 # ─────────────────────────────────────────────────────────────
 
+SHEET_ALIASES = {
+    "productivity": "productivity",
+    "checkout": "checkout",
+    "ads": "ads",
+    "churn": "churn",
+    "md": "md",
+}
+
+
 def load_cruce(file_like_or_path):
     """
-    Carga el Excel de 2 hojas y devuelve (productivity_df, checkout_df).
-    Se identifican por ANCHO (número de columnas), no por nombre de hoja
-    -- así no importa si vos o Excel les cambian el nombre ("Hoja 1" vs
-    "Productivity", etc.).
+    Carga el Excel de 5 hojas por NOMBRE (no por ancho -- el formato viejo
+    de 2 hojas quedó reemplazado). Case-insensitive y con espacios
+    recortados, por si el nombre real trae mayúsculas/espacios distintos.
+    Devuelve dict: {"productivity", "checkout", "ads", "churn", "md"} --
+    hoja faltante = DataFrame vacío, no revienta.
     """
     xls = pd.ExcelFile(file_like_or_path)
-    frames = {name: pd.read_excel(xls, sheet_name=name) for name in xls.sheet_names}
-    ordenadas = sorted(frames.items(), key=lambda kv: kv[1].shape[1], reverse=True)
-    productivity = ordenadas[0][1].copy()
-    checkout = ordenadas[1][1].copy() if len(ordenadas) > 1 else pd.DataFrame()
+    lower_map = {name.strip().lower(): name for name in xls.sheet_names}
 
-    for col in ("Date",):
-        if col in productivity.columns:
-            productivity[col] = pd.to_datetime(productivity[col], errors="coerce")
-    for col in ("Fecha",):
-        if col in checkout.columns:
-            checkout[col] = pd.to_datetime(checkout[col], errors="coerce")
+    hojas = {}
+    for key, alias in SHEET_ALIASES.items():
+        real_name = lower_map.get(alias)
+        hojas[key] = pd.read_excel(xls, sheet_name=real_name) if real_name else pd.DataFrame()
+
+    productivity = hojas["productivity"]
+    checkout = hojas["checkout"]
+
+    if "Date" in productivity.columns:
+        productivity["Date"] = pd.to_datetime(productivity["Date"], errors="coerce")
+    if "Fecha" in checkout.columns:
+        checkout["Fecha"] = pd.to_datetime(checkout["Fecha"], errors="coerce")
     if "Fecha Reactivación" in productivity.columns:
         productivity["Fecha Reactivación"] = pd.to_datetime(
             productivity["Fecha Reactivación"], errors="coerce"
         )
     if "Brand ID" in checkout.columns:
         checkout["brand_key"] = checkout["Brand ID"].apply(_brand_key)
+    # BUG REAL ENCONTRADO (agosto 2026, octavo ajuste): "Tipo de
+    # Contratacion" en Checkout trae "Adquisicion " con un espacio en
+    # blanco al final -- una comparación exacta contra "Adquisicion"
+    # (sin espacio) no matcheaba NINGUNA fila, aunque value_counts()
+    # mostraba 96 filas visualmente idénticas. Se recorta acá, en la
+    # carga, para que ningún otro lugar del código tenga que acordarse
+    # de este detalle.
+    if "Tipo de Contratacion" in checkout.columns:
+        checkout["Tipo de Contratacion"] = checkout["Tipo de Contratacion"].astype(str).str.strip()
+    if "FARMER" in checkout.columns:
+        checkout["FARMER"] = checkout["FARMER"].astype(str).str.strip()
     if "Code" in productivity.columns:
         productivity["brand_key"] = productivity["Code"].apply(_brand_key)
 
-    return productivity, checkout
+    hojas["productivity"] = productivity
+    hojas["checkout"] = checkout
+    return hojas
 
 
 def _brand_key(value):
-    """Normaliza 'AR104267', '104267', 104267.0 -> '104267' (solo el número,
-    sin importar el prefijo de país ni si viene como texto o numérico) --
-    Productivity y Checkout no siempre usan el mismo formato para el
-    mismo ID de marca."""
+    """Normaliza 'AR104267', '104267', 104267.0, '104308 - Granados Bar Ar'
+    -> '104267'/'104308' (solo el número, sin importar prefijo de país,
+    sufijo de nombre, ni si viene como texto o numérico) -- las 5 hojas
+    no usan el mismo formato de ID para la misma marca."""
     if pd.isna(value):
         return ""
     m = re.search(r"(\d+)", str(value))
     return m.group(1) if m else ""
+
+
+def _parse_pct(value):
+    """'21,97 %' -> 21.97 ; '0,0 %' -> 0.0 ; NaN/vacío -> NaN.
+    Las hojas ADS y MD traen los % como texto con coma decimal, no como
+    número -- hay que parsearlos antes de poder comparar contra 0."""
+    if pd.isna(value):
+        return float("nan")
+    s = str(value).strip().replace("%", "").replace(",", ".").strip()
+    if not s:
+        return float("nan")
+    try:
+        return float(s)
+    except ValueError:
+        return float("nan")
 
 
 def farmers_disponibles(productivity_df):
@@ -381,3 +416,197 @@ def tracker_vencidos(df, hoy=None):
     d = df.copy()
     d["Próximo contacto"] = pd.to_datetime(d["Próximo contacto"], errors="coerce").dt.date
     return d[(d["Próximo contacto"].notna()) & (d["Próximo contacto"] <= hoy) & (d["Estado"] != "Cerrado")]
+
+
+# ─────────────────────────────────────────────────────────────
+# TABLERO DE TRIAGE (Ads / Markdown / Churn) -- reemplaza el enfoque de
+# "funnel" (agosto 2026, octavo ajuste, pedido explícito de Sabas). No es
+# un embudo de conversión secuencial: es una clasificación mutuamente
+# excluyente de TODA la cartera elegible ("universo") en exactamente uno
+# de 5 estados, recalculada en vivo contra la fecha real de HOY cada vez
+# que se sube un archivo nuevo -- no contra la ventana del Excel.
+#
+# Regla de antigüedad (Ads y Markdown, validada con ejemplos reales de
+# Sabas: "hoy 15 -> caliente hasta 13, frío hasta 11" / "hoy 10 ->
+# caliente hasta 8, frío hasta 6"):
+#   días_transcurridos = HOY − fecha del primer contacto REAL de esa
+#                         palanca específica
+#   Caliente:   0, 1 o 2 días  (día 1-3 de vida del lead)
+#   Frío:       3 o 4 días     (día 4-5)
+#   Rechazado:  5+ días        (día 6 en adelante) -- o el override de
+#               conteo (>3 toques de rechazo dentro de la ventana de 5
+#               días desde el primer contacto), lo que ocurra primero.
+#
+# "No Contactado" (pedido explícito de Sabas, ajuste final) se dispara
+# en cualquiera de estos 3 casos, tratados como el mismo estado:
+#   1) la marca nunca tiene fila en Productivity, o
+#   2) tiene filas pero ninguna con ¿Contactado?=SI, o
+#   3) tuvo contacto real, pero NINGUNA de esas conversaciones tocó la
+#      palanca específica (columna de señal en NO/vacío en todas) --
+#      hablar de OPS tres veces no cuenta como haber hablado de Ads.
+# Por eso "días_transcurridos" arranca en la primera fila que cumple
+# AMBAS condiciones (contacto real + palanca tocada), no en la primera
+# fila de Productivity en general.
+# ─────────────────────────────────────────────────────────────
+
+TRIAGE_ORDEN = ["No Contactado", "Caliente", "Frío", "Rechazado", "Cerrado"]
+TRIAGE_COLORES = {
+    "No Contactado": "azul",
+    "Caliente": "granate",
+    "Frío": "celeste",
+    "Rechazado": "gris",
+    "Cerrado": "verde",
+}
+
+
+def _triage_generico(universo_keys, nombre_map, cerrados_keys, prod_farmer, col_señal, col_rechazo, val_rechazo, hoy):
+    """
+    Motor compartido de clasificación -- Ads y Markdown usan exactamente
+    la misma lógica de antigüedad, solo cambia qué columna de Productivity
+    marca "se tocó la palanca" (col_señal) y cuál marca "rechazo/no activo"
+    (col_rechazo/val_rechazo) para el override de conteo.
+    """
+    filas = []
+    for key in universo_keys:
+        nombre = nombre_map.get(key, key)
+
+        if key in cerrados_keys:
+            filas.append({"Code": key, "Marca": nombre, "Estado": "Cerrado", "Días": None, "Motivo": ""})
+            continue
+
+        marca_prod = prod_farmer[prod_farmer["brand_key"] == key]
+        contacto_real = marca_prod[(marca_prod["¿Contactado?"] == "SI") & (marca_prod[col_señal] == "SI")]
+
+        if contacto_real.empty:
+            filas.append({"Code": key, "Marca": nombre, "Estado": "No Contactado", "Días": None, "Motivo": ""})
+            continue
+
+        fecha_inicio = contacto_real["Date"].min()
+        dias = (hoy - fecha_inicio).days
+
+        # Override de conteo: rechazos/no-activo dentro de la ventana de
+        # 5 días desde el primer contacto (no desde hoy).
+        ventana = marca_prod[
+            (marca_prod["Date"] >= fecha_inicio)
+            & (marca_prod["Date"] <= fecha_inicio + pd.Timedelta(days=5))
+            & (marca_prod[col_rechazo] == val_rechazo)
+        ]
+        n_rechazos = len(ventana)
+
+        if dias >= 5 or n_rechazos > 3:
+            estado = "Rechazado"
+            motivo = f"{n_rechazos} rechazos en la ventana" if n_rechazos > 3 else f"{dias} días sin cerrar"
+        elif dias <= 2:
+            estado, motivo = "Caliente", ""
+        else:
+            estado, motivo = "Frío", ""
+
+        filas.append({"Code": key, "Marca": nombre, "Estado": estado, "Días": int(dias), "Motivo": motivo})
+
+    return pd.DataFrame(filas, columns=["Code", "Marca", "Estado", "Días", "Motivo"])
+
+
+def triage_ads(ads_df, productivity_df, checkout_df, farmer_email, hoy=None):
+    """
+    Universo: ADS.% Att. Bookings == 0 (parseado). Cerrado: Checkout con
+    Tipo de Contratacion="Adquisicion" para este Farmer. Señal de que se
+    tocó la palanca: Productivity.Ads=="SI". Override de rechazo:
+    Tipo Never Ads=="No activo".
+    """
+    hoy = pd.Timestamp(hoy) if hoy is not None else pd.Timestamp.now().normalize()
+
+    prod = productivity_df[productivity_df["Farmer"] == farmer_email].copy()
+    prod["brand_key"] = prod["Code"].apply(_brand_key)
+
+    d = ads_df.copy()
+    if d.empty or "BRAND" not in d.columns:
+        return pd.DataFrame(columns=["Code", "Marca", "Estado", "Días", "Motivo"])
+    d["brand_key"] = d["BRAND"].apply(_brand_key)
+    d["att_pct"] = d["% Att. Bookings"].apply(_parse_pct)
+    universo = d[(d["att_pct"] == 0) & (d["brand_key"] != "")]
+    universo_keys = sorted(universo["brand_key"].unique())
+    nombre_map = dict(zip(universo["brand_key"], universo["BRAND"]))
+
+    cerrados_keys = set()
+    chk = checkout_df.copy()
+    if not chk.empty and {"FARMER", "Tipo de Contratacion", "brand_key"}.issubset(chk.columns):
+        chk = chk[(chk["FARMER"] == farmer_email) & (chk["Tipo de Contratacion"] == "Adquisicion")]
+        cerrados_keys = set(chk["brand_key"])
+
+    return _triage_generico(universo_keys, nombre_map, cerrados_keys, prod, "Ads", "Tipo Never Ads", "No activo", hoy)
+
+
+def triage_md(md_df, productivity_df, farmer_email, hoy=None):
+    """
+    Universo: MD.MARKDOWN % es NaN o == 0 (parseado). Cerrado: Productivity
+    ¿Se aceptó lo ofrecido?=="Sí" al menos una vez (vive en Productivity,
+    no hace falta cruzar con Checkout). Señal: Productivity.Markdown=="SI".
+    Override de rechazo: ¿Se aceptó lo ofrecido?=="No aceptó ninguno"
+    (mismo criterio de conteo que Ads, extendido por simetría -- no venía
+    explícito en el pedido original para MD, ver nota en el README).
+    """
+    hoy = pd.Timestamp(hoy) if hoy is not None else pd.Timestamp.now().normalize()
+
+    prod = productivity_df[productivity_df["Farmer"] == farmer_email].copy()
+    prod["brand_key"] = prod["Code"].apply(_brand_key)
+
+    d = md_df.copy()
+    if d.empty or "BRAND ID" not in d.columns:
+        return pd.DataFrame(columns=["Code", "Marca", "Estado", "Días", "Motivo"])
+    d["brand_key"] = d["BRAND ID"].apply(_brand_key)
+    d["md_pct"] = d["MARKDOWN %"].apply(_parse_pct)
+    universo = d[(d["md_pct"].isna() | (d["md_pct"] == 0)) & (d["brand_key"] != "")]
+    universo_keys = sorted(universo["brand_key"].unique())
+    nombre_map = dict(zip(universo["brand_key"], universo["BRAND NAME"]))
+
+    aceptadas = prod[prod["¿Se aceptó lo ofrecido?"] == "Sí"]
+    cerrados_keys = set(aceptadas["brand_key"])
+
+    return _triage_generico(
+        universo_keys, nombre_map, cerrados_keys, prod,
+        "Markdown", "¿Se aceptó lo ofrecido?", "No aceptó ninguno", hoy,
+    )
+
+
+def triage_churn(churn_df, productivity_df, farmer_email):
+    """
+    3 bloques de SEVERIDAD, no de antigüedad (sin reloj de días, pedido
+    explícito de Sabas): PW1, Churn, Recuperada. Universo: la propia hoja
+    CHURN (Estado Actual = "Prevention W1" o "Churn"). Recuperada: entre
+    ese mismo universo, cualquiera con On Hold="SI" en Productivity —
+    "sin importar fecha" (no filtra si Fecha Reactivación quedó en el
+    pasado o el futuro, solo si existe la señal) — tiene prioridad sobre
+    PW1/Churn (partición mutuamente excluyente, sin doble conteo).
+    """
+    ch = churn_df.copy()
+    if ch.empty or "COUNTRY_BRAND_ID" not in ch.columns:
+        return pd.DataFrame(columns=["Code", "Marca", "Estado"])
+    if "FARMER" in ch.columns:
+        # La hoja CHURN trae el Farmer SIN dominio ("sabas.ramirez"), a
+        # diferencia de Productivity/Checkout que sí usan el correo
+        # completo ("sabas.ramirez@rappi.com") -- inconsistencia real
+        # entre hojas del propio export, no un bug de acá. Se compara
+        # solo por la parte local, insensible a mayúsculas.
+        local_farmer = str(farmer_email).split("@")[0].strip().lower()
+        ch = ch[ch["FARMER"].astype(str).str.strip().str.lower() == local_farmer]
+    ch["brand_key"] = ch["COUNTRY_BRAND_ID"].apply(_brand_key)
+
+    prod = productivity_df[
+        (productivity_df["Farmer"] == farmer_email) & (productivity_df["Churn"] == "SI")
+    ].copy()
+    prod["brand_key"] = prod["Code"].apply(_brand_key)
+    reactivadas_keys = set(prod[prod["On Hold"] == "SI"]["brand_key"])
+
+    filas = []
+    for _, row in ch.iterrows():
+        key = row["brand_key"]
+        nombre = row.get("BRAND_NAME", key)
+        if key in reactivadas_keys:
+            estado = "Recuperada"
+        elif row.get("Estado Actual") == "Prevention W1":
+            estado = "PW1"
+        else:
+            estado = "Churn"
+        filas.append({"Code": key, "Marca": nombre, "Estado": estado})
+
+    return pd.DataFrame(filas, columns=["Code", "Marca", "Estado"])

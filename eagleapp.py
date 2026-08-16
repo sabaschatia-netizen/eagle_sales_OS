@@ -1,9 +1,13 @@
 """
 Eagle — vista de altura sobre tu propio funnel de ventas.
 
-No mide al aliado, te mide a vos: cuántas llamadas se convierten en
-marcas trabajadas, cuáles cierran, cuánto tarda el ciclo, y qué tan
-balanceado está tu foco entre Ads (palanca primaria), Markdown y Churn.
+Tablero de TRIAGE (agosto 2026, octavo ajuste -- reemplaza el enfoque de
+"funnel" del primer intento, pedido explícito de Sabas): no mide
+conversión secuencial, mide en qué estado está CADA marca de tu cartera
+elegible AHORA MISMO -- No Contactado / Caliente / Frío / Rechazado /
+Cerrado para Ads y MD, PW1 / Churn / Recuperada para Churn -- con el
+reloj de antigüedad corriendo contra la fecha real de HOY, no contra la
+ventana del Excel, porque el archivo se actualiza a diario.
 
 Correr local:
     pip install -r requirements.txt
@@ -43,35 +47,43 @@ def alert(text, kind="warn"):
     st.markdown(f'<div class="eagle-alert {kind}">{text}</div>', unsafe_allow_html=True)
 
 
-def funnel_chart(steps, values, colors=None):
-    colors = colors or [COLORS["red"]] * len(steps)
-    fig = go.Figure(go.Funnel(
-        y=steps, x=values,
-        textinfo="value+percent initial",
-        marker={"color": colors},
-        connector={"line": {"color": COLORS["line"], "width": 1}},
-    ))
+def barra_triage(df_triage, orden):
+    """Barra horizontal apilada de una sola fila -- muestra la
+    distribución REAL de la cartera elegible en este momento entre los
+    estados de `orden`, no un flujo secuencial. Cada segmento usa el
+    color de marca que le corresponde (ver dl.TRIAGE_COLORES)."""
+    counts = df_triage["Estado"].value_counts() if len(df_triage) else pd.Series(dtype=int)
+    fig = go.Figure()
+    for estado in orden:
+        n = int(counts.get(estado, 0))
+        color = COLORS[dl.TRIAGE_COLORES.get(estado, "gris")]
+        fig.add_trace(go.Bar(
+            y=[""], x=[n], name=f"{estado} · {n}", orientation="h",
+            marker_color=color,
+            text=str(n) if n > 0 else "", textposition="inside",
+            insidetextfont={"color": COLORS["white"], "size": 13},
+        ))
     fig.update_layout(
+        barmode="stack", height=90,
         paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-        font={"color": COLORS["text"], "family": "Inter"},
-        margin=dict(l=10, r=10, t=10, b=10), height=260,
+        margin=dict(l=6, r=6, t=6, b=6),
+        showlegend=True, legend=dict(orientation="h", y=-0.35, font={"size": 11}),
+        xaxis=dict(visible=False), yaxis=dict(visible=False),
     )
     st.plotly_chart(fig, use_container_width=True)
 
 
-def donut_chart(labels, values, colors):
-    fig = go.Figure(go.Pie(
-        labels=labels, values=values, hole=0.6,
-        marker={"colors": colors}, textinfo="value",
-        textfont={"color": COLORS["bg"], "family": "Inter", "size": 13},
-    ))
-    fig.update_layout(
-        paper_bgcolor="rgba(0,0,0,0)",
-        font={"color": COLORS["text"], "family": "Inter"},
-        margin=dict(l=10, r=10, t=10, b=10), height=260,
-        legend={"orientation": "h", "y": -0.1},
-    )
-    st.plotly_chart(fig, use_container_width=True)
+def tabla_bloque(df_triage, estado, columnas, titulo=None, abierto=False):
+    """Un expander con la lista de marcas de un solo estado -- esto es
+    lo accionable: "siempre hará seguimiento solo de las marcas del
+    bloque superior", no la barra en sí."""
+    sub = df_triage[df_triage["Estado"] == estado][columnas]
+    titulo = titulo or estado
+    with st.expander(f"{titulo} ({len(sub)})", expanded=abierto):
+        if len(sub):
+            st.dataframe(sub, use_container_width=True, hide_index=True)
+        else:
+            st.caption("Ninguna marca en este estado.")
 
 
 # ─────────────────────────────────────────────────────────────
@@ -94,9 +106,8 @@ def header(title, subtitle):
 # ─────────────────────────────────────────────────────────────
 # SIDEBAR — misma postura que Wingman: columna fija (no st.sidebar
 # nativo), logo arriba, session pill, nav en botones apilados con
-# resaltado del activo, y un ancla al final (acá: "Reiniciar", ya que
-# Eagle no tiene login/logout como Wingman -- no hay sesión que cerrar,
-# pero sí tiene sentido limpiar el archivo cargado y arrancar de cero).
+# resaltado del activo, y un ancla al final ("Reiniciar", ya que Eagle
+# no tiene login/logout como Wingman).
 # ─────────────────────────────────────────────────────────────
 
 col_sidebar, col_main = st.columns([1, 5.2], gap="small")
@@ -109,17 +120,18 @@ with col_sidebar:
             unsafe_allow_html=True,
         )
 
-        up = st.file_uploader("Cruce Productivity + Checkout (.xlsx)", type=["xlsx"], label_visibility="collapsed")
+        up = st.file_uploader("Cruce (5 hojas: PRODUCTIVITY, CHECKOUT, ADS, CHURN, MD)", type=["xlsx"], label_visibility="collapsed")
         usando_ejemplo = False
         if up is not None:
-            productivity, checkout = dl.load_cruce(up)
+            hojas = dl.load_cruce(up)
         elif os.path.exists(EJEMPLO_PATH):
-            productivity, checkout = dl.load_cruce(EJEMPLO_PATH)
+            hojas = dl.load_cruce(EJEMPLO_PATH)
             usando_ejemplo = True
         else:
             st.info("Subí tu export para empezar.")
             st.stop()
 
+        productivity = hojas["productivity"]
         farmers = dl.farmers_disponibles(productivity)
         farmer = st.selectbox("Farmer", farmers, index=0, label_visibility="collapsed") if farmers else None
         if not farmer:
@@ -136,19 +148,13 @@ with col_sidebar:
             unsafe_allow_html=True,
         )
 
-        SECCIONES = [
-            ("funnels", "🎯 Los 3 Funnels"),
-        ]
-        st.session_state.setdefault("eagle_section", "funnels")
+        SECCIONES = [("triage", "🎯 Tablero de Triage")]
+        st.session_state.setdefault("eagle_section", "triage")
         for sec_key, sec_label in SECCIONES:
             if st.button(sec_label, key=f"nav_{sec_key}", use_container_width=True):
                 st.session_state["eagle_section"] = sec_key
                 st.rerun()
 
-        # Resaltar el botón activo -- mismo mecanismo que Wingman: CSS
-        # inyectado apuntando al key exacto del botón activo, porque
-        # st.session_state cambia en cada rerun y no puede resolverse con
-        # CSS estático.
         active_key = f"nav_{st.session_state['eagle_section']}"
         st.markdown(
             f"""<style>
@@ -164,10 +170,11 @@ with col_sidebar:
 
         if usando_ejemplo:
             st.caption("📎 Usando el archivo de ejemplo.")
+        st.caption(f"📅 Hoy: {pd.Timestamp.now().date()}")
         if "Date" in productivity.columns:
             fmin, fmax = productivity["Date"].min(), productivity["Date"].max()
             if pd.notna(fmin) and pd.notna(fmax):
-                st.caption(f"Ventana: {fmin.date()} → {fmax.date()}")
+                st.caption(f"Ventana del archivo: {fmin.date()} → {fmax.date()}")
 
         st.markdown('<div class="logout-anchor">', unsafe_allow_html=True)
         if st.button("↺ Reiniciar", use_container_width=True):
@@ -178,75 +185,56 @@ with col_sidebar:
 
 col_main.__enter__()
 
-header(dl.farmer_display(farmer), "Los 3 Funnels")
+header(dl.farmer_display(farmer), "Tablero de Triage")
 
 
 # ─────────────────────────────────────────────────────────────
-# CÁLCULOS BASE
+# CÁLCULOS BASE — recalculados en vivo contra HOY en cada carga
 # ─────────────────────────────────────────────────────────────
 
-ads = dl.ads_funnel(productivity, checkout, farmer)
-md = dl.md_funnel(productivity, ads, farmer)
-churn = dl.churn_funnel(productivity, farmer)
+t_ads = dl.triage_ads(hojas["ads"], productivity, hojas["checkout"], farmer)
+t_md = dl.triage_md(hojas["md"], productivity, farmer)
+t_churn = dl.triage_churn(hojas["churn"], productivity, farmer)
 
 
 # ─────────────────────────────────────────────────────────────
-# LOS 3 FUNNELS
+# TABLERO
 # ─────────────────────────────────────────────────────────────
 
 tab_ads, tab_md, tab_churn = st.tabs(["🚀 Ads (Never Ads)", "🏷️ Markdown", "⚠️ Churn"])
 
+COLS_TRIAGE = ["Marca", "Code", "Días", "Motivo"]
+
 with tab_ads:
-    colf, colm = st.columns([1, 1])
-    with colf:
-        funnel_chart(
-            ["Llamadas Never Ads", "Marcas gestionadas", "Cerradas"],
-            [ads["llamadas"], ads["marcas"], ads["cerradas_marcas"]],
-            colors=[COLORS["azul"], COLORS["red"], COLORS["verde"]],
-        )
-    with colm:
-        card("Ciclo mediana", f'{ads["ciclo_mediana_dias"]:.0f} días' if ads["ciclo_mediana_dias"] is not None else "s/d",
-             "entre la llamada y el cierre en Checkout", accent=True)
-        card("Tasa de cierre", f'{ads["tasa_cierre_marcas"]:.0f}%', f'{ads["cerradas_marcas"]} de {ads["marcas"]} marcas')
-
-    st.markdown("##### Marcas cerradas")
-    st.dataframe(ads["detalle_cierres"], use_container_width=True, hide_index=True)
-
-    st.markdown("##### 'No activo' — nunca cerraron en esta ventana")
-    st.dataframe(ads["detalle_no_activo"], use_container_width=True, hide_index=True)
+    st.caption(f"Universo (0% Att. Bookings): {len(t_ads)} marcas — clasificadas en vivo contra hoy.")
+    if len(t_ads):
+        barra_triage(t_ads, dl.TRIAGE_ORDEN)
+        tabla_bloque(t_ads, "Caliente", COLS_TRIAGE, "🔥 Caliente — actuar hoy", abierto=True)
+        tabla_bloque(t_ads, "Frío", COLS_TRIAGE, "🧊 Frío — antes de que se pierda")
+        tabla_bloque(t_ads, "Rechazado", COLS_TRIAGE, "⛔ Rechazado")
+        tabla_bloque(t_ads, "No Contactado", ["Marca", "Code"], "📭 No Contactado")
+        tabla_bloque(t_ads, "Cerrado", ["Marca", "Code"], "✅ Cerrado")
+    else:
+        st.caption("Sin datos de ADS para calcular el universo.")
 
 with tab_md:
-    colf, colm = st.columns([1, 1])
-    with colf:
-        funnel_chart(
-            ["Llamadas ofrecidas", "Marcas ofrecidas", "Aceptadas"],
-            [md["llamadas"], md["marcas"], md["aceptadas_marcas"]],
-            colors=[COLORS["azul"], COLORS["red"], COLORS["verde"]],
-        )
-    with colm:
-        card("Tasa de aceptación", f'{md["tasa_aceptacion"]:.1f}%', f'{md["aceptadas_llamadas"]} de {md["llamadas"]} llamadas', accent=True)
-        card("¿MD empuja a Ads después?", f'{md["md_que_luego_cerro_ads_n"]} de {md["aceptadas_marcas"]}',
-             f'{md["md_que_luego_cerro_ads_pct"]:.0f}% de las marcas que aceptaron MD')
-
-    if len(md["flips_rechazo_aceptacion"]):
-        st.markdown("##### Marcas que giraron de rechazo a aceptación")
-        st.dataframe(md["flips_rechazo_aceptacion"], use_container_width=True, hide_index=True)
-    st.markdown("##### Marcas que aceptaron")
-    st.dataframe(md["detalle_aceptadas"], use_container_width=True, hide_index=True)
+    st.caption(f"Universo (Markdown % en 0 o vacío): {len(t_md)} marcas — clasificadas en vivo contra hoy.")
+    if len(t_md):
+        barra_triage(t_md, dl.TRIAGE_ORDEN)
+        tabla_bloque(t_md, "Caliente", COLS_TRIAGE, "🔥 Caliente — actuar hoy", abierto=True)
+        tabla_bloque(t_md, "Frío", COLS_TRIAGE, "🧊 Frío — antes de que se pierda")
+        tabla_bloque(t_md, "Rechazado", COLS_TRIAGE, "⛔ Rechazado")
+        tabla_bloque(t_md, "No Contactado", ["Marca", "Code"], "📭 No Contactado")
+        tabla_bloque(t_md, "Cerrado", ["Marca", "Code"], "✅ Cerrado")
+    else:
+        st.caption("Sin datos de MD para calcular el universo.")
 
 with tab_churn:
-    colf, colm = st.columns([1, 1])
-    with colf:
-        cats = churn["conteo_por_categoria"]
-        cat_colors = {"Cerrada permanente": COLORS["granate"], "Reactivación programada": COLORS["azul"], "Salvada en la llamada": COLORS["verde"]}
-        if cats:
-            donut_chart(list(cats.keys()), list(cats.values()), [cat_colors.get(k, COLORS["gris"]) for k in cats.keys()])
-    with colm:
-        card("Retención", f'{churn["tasa_retencion"]:.0f}%', f'{churn["retenidas"]} de {churn["marcas"]} marcas retenidas', accent=True)
-        card("Gestiones en la ventana", str(churn["gestiones"]), f'sobre {churn["marcas"]} marcas únicas')
-
-    if churn["hay_fechas_a_revisar"]:
-        alert("Alguna fecha de reactivación quedó en el pasado respecto a la fecha de la gestión — probablemente mal cargada en el sistema. Revisala en la tabla antes de reportar.", "warn")
-
-    st.markdown("##### Detalle por marca (última gestión de cada una)")
-    st.dataframe(churn["detalle"], use_container_width=True, hide_index=True)
+    st.caption(f"Universo (Prevention W1 + Churn de tu cartera): {len(t_churn)} marcas — sin reloj de antigüedad, por severidad.")
+    if len(t_churn):
+        barra_triage(t_churn, ["PW1", "Churn", "Recuperada"])
+        tabla_bloque(t_churn, "PW1", ["Marca", "Code"], "🟡 Prevention W1 — actuar antes de que caiga", abierto=True)
+        tabla_bloque(t_churn, "Churn", ["Marca", "Code"], "🔴 Churn")
+        tabla_bloque(t_churn, "Recuperada", ["Marca", "Code"], "✅ Recuperada")
+    else:
+        st.caption("Sin marcas en Prevention W1 o Churn para este Farmer.")

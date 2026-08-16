@@ -1,29 +1,14 @@
 # Eagle
 
-Vista de altura sobre tu propio funnel de ventas — no mide al aliado, te
-mide a vos: cuántas llamadas se convierten en marcas trabajadas, cuáles
-cierran, cuánto tarda el ciclo, y qué tan balanceado está tu foco entre
-Ads (palanca primaria), Markdown y Churn.
+Tablero de triage sobre tu propia cartera — no mide al aliado, mide en
+qué estado está CADA marca elegible ahora mismo: No Contactado /
+Caliente / Frío / Rechazado / Cerrado para Ads y Markdown, PW1 / Churn /
+Recuperada para Churn.
 
-## Diseño (segundo rebrand — logo real)
-
-Paleta extraída por muestreo de píxeles del logo real
-(`assets/eagle_logo.png`), no a ojo — reemplaza la paleta oro/slate
-nocturno del primer intento.
-
-- **Logo**: PNG embebido en base64 en `logo_asset.py` (mismo patrón que
-  usa Wingman con el suyo) — el repo funciona apenas se clona, sin
-  depender de un archivo externo.
-- **Paleta**: rojo de marca `#E21D22` (sidebar, headers, acento), fondo
-  claro `#FAFAF9` para el contenido — un fondo oscuro sostenido cansa la
-  vista en una app de datos que se mira todo el día.
-- **Paleta de estados = la franja del propio logo**, no colores
-  inventados aparte: granate `#A2060A` (No contactado), celeste
-  `#86B3D8` (Objeción con argumento), azul `#1E6EAF` (Timing), verde
-  `#50B833` (Cerrado). Cierre total usa un gris neutro `#8B8F97` — ese
-  estado no tiene color en la franja del logo.
-- **Tipografía**: Plus Jakarta Sans (display) + Inter (body) + JetBrains
-  Mono (datos).
+No es un funnel de conversión secuencial (ver "Por qué no es un funnel"
+abajo) — es una clasificación mutuamente excluyente de toda la cartera,
+recalculada en vivo contra la fecha real de HOY cada vez que subís el
+Excel del día.
 
 ## Correr local
 
@@ -32,70 +17,100 @@ pip install -r requirements.txt
 streamlit run eagleapp.py
 ```
 
-Subí tu export "cruce" (Productivity + Checkout, 2 hojas en un mismo
-Excel) desde la barra lateral. Si no subís nada, la app arranca con
-`data/CRUCE_PRO_SALES_ejemplo.xlsx` como demo.
+Subí tu export "cruce" (5 hojas: `PRODUCTIVITY`, `CHECKOUT`, `ADS`,
+`CHURN`, `MD`, identificadas por nombre) desde la barra lateral. Si no
+subís nada, la app arranca con `data/CRUCE_PRO_SALES_ejemplo.xlsx` como
+demo.
 
-## Qué calcula
+## Por qué no es un funnel
 
-Las 3 reglas de negocio de cada funnel están documentadas en el
-docstring de cada función en `data_layer.py`, validadas número por
-número contra un cruce real de 12 días (3-14 ago 2026):
+Un funnel real implica que cada etapa es un subconjunto que fluye de la
+anterior. Acá "Rechazado" y "Pipeline" no son secuenciales — son
+destinos mutuamente excluyentes a los que llega un mismo prospecto según
+cuántos días lleva y cuántos intentos tuvo. Por eso el tablero es una
+**barra horizontal apilada** por palanca (distribución real de la
+cartera en este momento) con la **lista de marcas debajo de cada
+bloque** — eso es lo accionable, no el gráfico.
 
-- **Ads (Never Ads)**: llamadas → marcas gestionadas → cerradas (`Tipo
-  Never Ads` en Sin/Con coinversión). Ciclo = días entre la llamada y el
-  match más cercano en Checkout (o 0 si Productivity ya tipifica el
-  cierre en la misma fecha de la llamada).
-- **Markdown**: llamadas con campaña ofrecida → aceptadas. Cruza contra
-  el funnel de Ads para ver si las marcas que aceptaron MD cerraron Ads
-  después. Detecta "flips" de rechazo a aceptación en fechas
-  posteriores.
-- **Churn**: clasifica cada gestión en 3 categorías según `On Hold` +
-  `Fecha Reactivación` vs. la fecha de la llamada:
-  - `On Hold = NO` → **Cerrada permanente**
-  - `On Hold = SI` y `Fecha Reactivación` = fecha de la llamada →
-    **Salvada en la llamada** (nunca llegó a apagarse)
-  - `On Hold = SI` y `Fecha Reactivación` distinta → **Reactivación
-    programada**
-  - Si la fecha de reactivación queda en el PASADO respecto a la
-    llamada, se marca `revisar_fecha=True` — típicamente significa que
-    quedó mal cargada en el sistema, no que la marca esté cerrada.
+## Reglas de negocio (documentadas también en el docstring de cada
+función en `data_layer.py`)
+
+**Universo elegible:**
+- Ads: `ADS.% Att. Bookings` parseado == 0 (viene como texto con coma
+  decimal, `"0,0 %"` — se parsea antes de comparar).
+- Markdown: `MD.MARKDOWN %` parseado es NaN **o** == 0 (acá sí incluye
+  vacío, a diferencia de Ads).
+- Churn: toda la hoja `CHURN` filtrada a este Farmer (`Estado Actual` =
+  "Prevention W1" o "Churn").
+
+**Antigüedad (Ads y Markdown, reloj contra HOY real, no contra la
+ventana del Excel):**
+```
+días = HOY − fecha del primer contacto REAL de esa palanca específica
+Caliente:   0-2 días
+Frío:       3-4 días
+Rechazado:  5+ días, o más de 3 rechazos/no-activo dentro de los
+            primeros 5 días desde el primer contacto
+```
+"Primer contacto real de esa palanca" = la fila más antigua donde
+`¿Contactado?=SI` **y** la columna de esa palanca específica (`Ads` o
+`Markdown`) también es `SI` — hablar de otra cosa tres veces no cuenta
+como haber tocado esta palanca.
+
+**No Contactado** se dispara si la marca nunca tiene fila en
+Productivity, o tiene filas pero ninguna con contacto real + palanca
+tocada simultáneamente.
+
+**Cerrado** siempre tiene prioridad sobre cualquier otro estado (se
+chequea primero): Ads = aparece en `CHECKOUT` con
+`Tipo de Contratacion="Adquisicion"` para este Farmer. Markdown =
+`Productivity.¿Se aceptó lo ofrecido?="Sí"` (vive en Productivity, no
+hace falta cruzar con Checkout).
+
+**Churn** no usa reloj de antigüedad — son 3 bloques de severidad:
+PW1 → Churn → Recuperada (esta última tiene prioridad: cualquier marca
+con `On Hold=SI` en Productivity, sin importar si la fecha de
+reactivación quedó en el pasado o el futuro).
+
+## 2 bugs reales de la fuente de datos, ya blindados en el loader
+
+- **`CHECKOUT.Tipo de Contratacion`** trae `"Adquisicion "` con un
+  espacio en blanco al final — una comparación exacta sin recortar no
+  matcheaba ninguna fila. Se recorta en `load_cruce()`, así ningún otro
+  lugar del código tiene que acordarse de este detalle.
+- **`CHURN.FARMER`** viene sin el dominio de correo (`"sabas.ramirez"`,
+  no `"sabas.ramirez@rappi.com"` como en las otras 4 hojas) — se compara
+  solo por la parte local, insensible a mayúsculas.
 
 ## Archivos
 
 | Archivo | Qué hace |
 |---|---|
-| `eagleapp.py` | UI: sidebar de carga, Resumen, Los 3 Funnels, Radar Post-Llamada, Mezcla de Palancas |
-| `data_layer.py` | Parseo del Excel + los 3 funnels + tracker + mezcla |
-| `theme.py` | Paleta propia (oro/slate nocturno), tipografía, CSS |
+| `eagleapp.py` | UI: sidebar de carga + Tablero de Triage (3 tabs: Ads, Markdown, Churn) |
+| `data_layer.py` | Parseo de las 5 hojas + motor de clasificación de triage |
+| `theme.py` | Paleta de marca (rojo `#E21D22` + los 4 colores de la franja del logo), sidebar/header calcados de Wingman |
+| `logo_asset.py` | Logo real embebido en base64 |
 
-## Radar Post-Llamada — los 5 estados
+## Diseño
 
-Ninguna llamada queda sin destino. Cada una cae en uno de estos 5, con
-su propia fecha de seguimiento por defecto (ajustable por llamada):
-
-| Estado | Seguimiento default |
-|---|---|
-| Cerrado | — (sin seguimiento) |
-| Objeción con argumento | 4 días |
-| Timing / no es el momento | 12 días |
-| No contactado | 1-2 días, sugiere cambiar de canal |
-| Cierre total | 30 días |
-
-**Limitación conocida de esta v1:** el tracker persiste en
-`data/radar_tracker.csv`. En hosting efímero (ej. Streamlit Community
-Cloud gratis) ese archivo se puede reiniciar en cada redeploy. Para
-persistencia real, la siguiente iteración natural es Google Sheets o
-una base chica (Supabase/SQLite con volumen persistente).
+- **Logo y paleta**: extraídos por muestreo de píxeles del logo real
+  (`assets/eagle_logo.png`), no a ojo. Rojo de marca `#E21D22`. Los
+  colores de estado (granate/celeste/azul/gris/verde) son los mismos 4
+  de la franja del logo — no son inventados aparte.
+- **Sidebar y header**: misma postura y posiciones que Wingman (columna
+  fija, logo arriba, session pill, nav en botones apilados, header con
+  logo a la derecha) — mismo tipo de fuente (Poppins) también.
+- **Tipografía**: Poppins en todo (Wingman no usa fuente mono aparte, acá
+  tampoco).
 
 ## Pendiente (para iterar)
 
+- **Comparar dos fotos en el tiempo** (cuántas marcas se movieron de un
+  bloque a otro desde ayer) — se descartó explícitamente para esta
+  versión (se mide siempre la foto de HOY, en vivo, nada de historial
+  guardado), pero queda como posible iteración futura si en algún
+  momento se necesita.
 - **Mediana de AOV** de la cartera (vía `presupuesto_semana1` de Ads
-  Plan en Wingman) — Eagle todavía no lee el Excel de Wingman, hoy es un
-  número que se saca aparte y no está conectado a esta app.
-- **Mezcla de Palancas** hoy es de carga manual (meta/logrado desde
-  Rendimiento País de Wingman) — se podría automatizar si en algún
-  momento Eagle y Wingman comparten fuente de datos.
-- **Persistencia real del Radar** (ver limitación arriba).
+  Plan en Wingman) — Eagle todavía no lee el Excel de Wingman.
 - Diseño visual: colores y gráficos son un primer paso, pensado para
   iterar.
