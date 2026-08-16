@@ -201,19 +201,40 @@ def build_css():
        ancestro real tanto de la card como del botón, así que position
        absolute + inset:0 lo estira exacto sobre la card sin importar su
        alto real -- no hay valores fijos en px que puedan quedar cortos
-       o largos y dejar un resto de caja visible. */
+       o largos y dejar un resto de caja visible.
+
+       BUG REAL ENCONTRADO (pedido explícito de Sabas: "el clic cae
+       debajo de la card, en el vacío junto a la flecha"): Streamlit
+       envuelve cada st.markdown/st.button en su propio
+       [data-testid="stElementContainer"], y por defecto les mete un
+       margin-bottom entre ellos. El botón absoluto se posiciona bien
+       relativo al contenedor, pero el contenedor mismo terminaba más
+       alto que la card visible porque esos 4 elementos (div apertura,
+       div de la card, botón, div cierre) sumaban sus márgenes por
+       defecto -- el click-zone (inset:0 del contenedor completo)
+       quedaba más grande que la card, invadiendo el espacio de la
+       flecha de abajo. Se pone margin/padding en 0 en todos los
+       elementos internos para que la altura del contenedor sea
+       EXACTAMENTE la altura visual de la card. */
     div[class*="st-key-fncard_"] {{
         position: relative !important;
+        padding: 0 !important;
+    }}
+    div[class*="st-key-fncard_"] [data-testid="stElementContainer"] {{
+        margin: 0 !important; padding: 0 !important;
+    }}
+    div[class*="st-key-fncard_"] .stMarkdown {{
+        margin: 0 !important; padding: 0 !important;
     }}
     div[class*="st-key-fncard_"] .stButton {{
         position: absolute !important; inset: 0 !important;
-        margin: 0 !important; z-index: 5 !important;
+        margin: 0 !important; padding: 0 !important; z-index: 5 !important;
     }}
     div[class*="st-key-fncard_"] .stButton button {{
         width: 100% !important; height: 100% !important;
         background: transparent !important; border: none !important;
         color: transparent !important; box-shadow: none !important;
-        border-radius: 14px !important; padding: 0 !important;
+        border-radius: 14px !important; padding: 0 !important; margin: 0 !important;
     }}
     div[class*="st-key-fncard_"] .stButton button p {{ color: transparent !important; }}
     /* La "luz" de hover/active se ve en la CARD, no en el botón, aunque

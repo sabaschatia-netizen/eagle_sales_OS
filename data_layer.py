@@ -323,7 +323,7 @@ def dias_habiles_entre(desde, hasta):
 # otra lectura dejaría marcas sin bucket y rompería la regla de oro.
 
 FUNNEL_ORDEN_L1 = ["Contactado", "No Contactado", "Sin Gestionar"]
-FUNNEL_ORDEN_L2 = ["Pipeline", "Rechazado", "Cierre"]
+FUNNEL_ORDEN_L2 = ["Pipeline", "Rechazado"]
 FUNNEL_ORDEN_L3 = ["Caliente", "Frío"]
 
 COLS_TRIAGE = ["Brand ID", "Brand Name", "GMV", "Status"]
@@ -336,7 +336,7 @@ def _clasificar_marca(key, nombre, gmv, marca_prod, es_cierre, col_señal, hoy):
     """Devuelve (nivel1, nivel2, nivel3) para una marca. nivel2/nivel3
     quedan en None si la marca no llega a ese nivel."""
     if es_cierre:
-        return "Contactado", "Cierre", None
+        return "Contactado", "Pipeline", "Cierre"
 
     if marca_prod.empty:
         return "Sin Gestionar", None, None
@@ -379,19 +379,23 @@ def _construir_funnel(universo_keys, nombre_map, gmv_map, cierre_keys, prod_farm
 def funnel_niveles(df):
     """Arma los 4 niveles listos para pintar. Cada nivel trae su total,
     los segmentos de su barra interna (nombre, n, %), y el subconjunto de
-    marcas que le corresponde con su Status para la tabla lateral."""
-    # BUG REAL ENCONTRADO (pedido explícito de Sabas): antes una marca en
-    # Cierre quedaba con N2="Pipeline" (para que sumara bien en el nivel
-    # Contactados), pero eso hacía que el bloque de Pipeline la SIGUIERA
-    # contando dentro de su propia barra (Caliente + Frío + Cierre) --
-    # visualmente el cierre aparecía duplicado, una vez en su propia
-    # card y otra vez metido dentro de Pipeline. Ahora Cierre es su
-    # propio valor de N2 (no "Pipeline"), así que el bloque de Pipeline
-    # automáticamente deja de contarlo, y Contactados sigue sumando bien
-    # con 3 segmentos en vez de 2 (Pipeline + Rechazado + Cierre).
-    n_cierre = int((df["N2"] == "Cierre").sum())
+    marcas que le corresponde con su Status para la tabla lateral.
+
+    Cierre es terminal y SOLO se ve en su propia card al final del
+    funnel (pedido explícito de Sabas: "ese es precisamente el sentido
+    del funnel") -- no aparece como segmento ni en la barra de
+    Contactados ni en la de Pipeline. Para lograrlo sin romper la regla
+    de oro (la suma de segmentos de un nivel = el total de ese nivel):
+    a nivel de dato una marca cerrada sigue con N2="Pipeline" (así
+    Contactados = Pipeline + Rechazado sigue cuadrando con solo 2
+    segmentos), pero el bloque de Pipeline y su tabla se arman
+    filtrando por N3 (Caliente/Frío), que para una marca cerrada es
+    "Cierre" -- así queda afuera automáticamente, sin necesidad de un
+    tercer segmento visible en ningún lado salvo su propia card.
+    """
     n_contactado = int((df["N1"] == "Contactado").sum())
-    n_pipeline = int((df["N2"] == "Pipeline").sum())
+    n_cierre = int((df["N3"] == "Cierre").sum())
+    n_pipeline = int(df["N3"].isin(["Caliente", "Frío"]).sum())
 
     def segs(pares):
         total = sum(n for _, n in pares) or 1
@@ -400,9 +404,8 @@ def funnel_niveles(df):
     base_tbl = df.assign(Status=df["N1"])
     cont_tbl = df[df["N1"] == "Contactado"].assign(
         Status=lambda d: d["N2"].fillna("Pipeline"))
-    pipe_tbl = df[df["N2"] == "Pipeline"].assign(
-        Status=lambda d: d["N3"].fillna("Pipeline"))
-    cierre_tbl = df[df["N2"] == "Cierre"].assign(Status="Cerrado")
+    pipe_tbl = df[df["N3"].isin(["Caliente", "Frío"])].assign(Status=df["N3"])
+    cierre_tbl = df[df["N3"] == "Cierre"].assign(Status="Cerrado")
 
     return [
         {

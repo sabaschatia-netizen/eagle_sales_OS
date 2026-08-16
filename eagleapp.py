@@ -64,8 +64,11 @@ def encontrar_datos():
 
 # Anchos de cada nivel del funnel -- se van angostando para reforzar la
 # forma de embudo (pedido explícito: "que se logren distinguir las barras
-# angostándose").
-NIVEL_MARGENES = ["0%", "7%", "14%", "21%"]
+# angostándose" / "es un funnel, los de abajo siempre son más pequeños").
+# Valores subidos a un escalón bien perceptible (cada nivel pierde ~20%
+# de ancho total respecto al anterior) -- con 7/14/21% el achicamiento
+# era demasiado sutil para notarse a simple vista.
+NIVEL_MARGENES = ["0%", "10%", "20%", "30%"]
 
 
 def header(title, subtitle):
