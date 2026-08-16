@@ -19,6 +19,7 @@ local.
 import os
 import re
 
+import numpy as np
 import pandas as pd
 
 
@@ -214,570 +215,300 @@ def farmer_initials(email):
     return (partes[0][0] + partes[1][0]).upper()
 
 
-# ─────────────────────────────────────────────────────────────
-# FUNNEL 1 — ADS (NEVER ADS)
-# ─────────────────────────────────────────────────────────────
+# ═════════════════════════════════════════════════════════════
+# VENTANA Y DÍAS HÁBILES
+# ═════════════════════════════════════════════════════════════
+# Pedido explícito de Sabas (décimo ajuste): la ventana se mide SIEMPRE
+# desde el primer día hábil del mes en curso hasta hoy, y la temperatura
+# de los leads (Caliente/Frío) también se cuenta en días HÁBILES, no
+# calendario -- un lead contactado el viernes no debe "enfriarse" por el
+# fin de semana.
 
-def ads_funnel(productivity_df, checkout_df, farmer_email):
-    """
-    Llamadas de tipo 'Never Ads' -> cuáles cerraron (Tipo Never Ads =
-    'Sin coinversión' / 'Con Coinversión') vs cuáles no ('No activo').
-
-    Ciclo: para cada marca cerrada, se busca en Checkout la fila más
-    antigua con el mismo brand_key, el mismo Farmer, y Fecha >= la fecha
-    de la llamada -- el ciclo es esa diferencia en días. Si no hay match
-    en Checkout, se usa 0 (la propia tipificación de Productivity ya
-    marca el cierre en la fecha de esa llamada).
-    """
-    dfp = productivity_df[productivity_df["Farmer"] == farmer_email]
-    never = dfp[dfp["Tipo Ads"] == "Never Ads"].copy()
-
-    llamadas = len(never)
-    marcas = never["Code"].nunique()
-
-    cerradas_mask = never["Tipo Never Ads"].isin(["Sin coinversión", "Con Coinversión"])
-    cerradas = never[cerradas_mask].copy()
-    no_activo = never[never["Tipo Never Ads"] == "No activo"].copy()
-
-    dfc = checkout_df
-    if "Farmer" in dfc.columns:
-        pass  # checkout usa "FARMER", se maneja abajo
-    dfc_farmer = dfc[dfc.get("FARMER", pd.Series(dtype=str)) == farmer_email] if "FARMER" in dfc.columns else pd.DataFrame()
-
-    ciclos = []
-    detalle_cierres = []
-    for _, row in cerradas.iterrows():
-        bkey = row["brand_key"]
-        fecha_llamada = row["Date"]
-        match = dfc_farmer[(dfc_farmer["brand_key"] == bkey) & (dfc_farmer["Fecha"] >= fecha_llamada)]
-        if len(match):
-            fecha_cierre = match.sort_values("Fecha").iloc[0]["Fecha"]
-            ciclo = (fecha_cierre - fecha_llamada).days
-        else:
-            fecha_cierre = fecha_llamada
-            ciclo = 0
-        ciclos.append(ciclo)
-        detalle_cierres.append({
-            "Marca": row["Brand"], "Code": row["Code"], "Tipo": row["Tipo Never Ads"],
-            "Fecha llamada": fecha_llamada.date() if pd.notna(fecha_llamada) else None,
-            "Fecha cierre": fecha_cierre.date() if pd.notna(fecha_cierre) else None,
-            "Ciclo (días)": ciclo,
-        })
-
-    ciclo_mediana = float(pd.Series(ciclos).median()) if ciclos else None
-
-    return {
-        "llamadas": llamadas,
-        "marcas": marcas,
-        "cerradas_llamadas": len(cerradas),
-        "cerradas_marcas": cerradas["Code"].nunique(),
-        "no_activo_llamadas": len(no_activo),
-        "no_activo_marcas": no_activo["Code"].nunique(),
-        "tasa_cierre_marcas": (cerradas["Code"].nunique() / marcas * 100) if marcas else 0.0,
-        "ciclo_mediana_dias": ciclo_mediana,
-        "detalle_cierres": pd.DataFrame(detalle_cierres),
-        "detalle_no_activo": no_activo[["Brand", "Code", "Date"]].rename(
-            columns={"Brand": "Marca", "Date": "Fecha llamada"}
-        ),
-    }
+def primer_dia_habil_mes(hoy=None):
+    hoy = pd.Timestamp(hoy) if hoy is not None else pd.Timestamp.now().normalize()
+    d = hoy.replace(day=1)
+    while d.weekday() >= 5:  # 5=sáb, 6=dom
+        d += pd.Timedelta(days=1)
+    return d.normalize()
 
 
-# ─────────────────────────────────────────────────────────────
-# FUNNEL 2 — MARKDOWN
-# ─────────────────────────────────────────────────────────────
-
-def md_funnel(productivity_df, ads_funnel_result, farmer_email):
-    """
-    Llamadas donde se ofreció campaña ('Campaña Ofrecida' con valor) vs
-    cuántas aceptaron ('¿Se aceptó lo ofrecido?' == 'Sí').
-
-    Cruce con Ads: de las marcas que aceptaron MD, cuántas aparecen
-    también como cierre en el funnel de Ads (ads_funnel_result) en esta
-    misma ventana -- evidencia (o falta de ella) de que MD esté
-    empujando a Ads después.
-
-    Flips de rechazo a aceptación: mismo Code con una fila 'No aceptó
-    ninguno' seguida de una fila 'Sí' en fecha posterior -- cuántos días
-    pasaron entre el primer rechazo y la aceptación.
-    """
-    dfp = productivity_df[productivity_df["Farmer"] == farmer_email]
-    ofrecidas = dfp[dfp["Campaña Ofrecida"].notna()].copy()
-
-    llamadas = len(ofrecidas)
-    marcas = ofrecidas["Code"].nunique()
-
-    aceptadas = ofrecidas[ofrecidas["¿Se aceptó lo ofrecido?"] == "Sí"].copy()
-    rechazadas = ofrecidas[ofrecidas["¿Se aceptó lo ofrecido?"] == "No aceptó ninguno"].copy()
-
-    codes_aceptaron_md = set(aceptadas["Code"].unique())
-    codes_cerraron_ads = set(ads_funnel_result["detalle_cierres"]["Code"]) if len(ads_funnel_result["detalle_cierres"]) else set()
-    md_que_luego_cerro_ads = codes_aceptaron_md & codes_cerraron_ads
-
-    flips = []
-    for code, g in ofrecidas.sort_values("Date").groupby("Code"):
-        respuestas = g["¿Se aceptó lo ofrecido?"].tolist()
-        fechas = g["Date"].tolist()
-        primer_rechazo_idx = next((i for i, r in enumerate(respuestas) if r == "No aceptó ninguno"), None)
-        if primer_rechazo_idx is None:
-            continue
-        for i in range(primer_rechazo_idx + 1, len(respuestas)):
-            if respuestas[i] == "Sí":
-                dias = (fechas[i] - fechas[primer_rechazo_idx]).days
-                flips.append({
-                    "Marca": g["Brand"].iloc[0], "Code": code,
-                    "Días rechazo→aceptación": dias,
-                })
-                break
-
-    return {
-        "llamadas": llamadas,
-        "marcas": marcas,
-        "aceptadas_llamadas": len(aceptadas),
-        "aceptadas_marcas": len(codes_aceptaron_md),
-        "tasa_aceptacion": (len(aceptadas) / llamadas * 100) if llamadas else 0.0,  # base: llamadas (7/47=14.9%)
-        "tasa_aceptacion_marcas": (len(codes_aceptaron_md) / marcas * 100) if marcas else 0.0,  # base alterna: marcas
-        "rechazadas_marcas": rechazadas["Code"].nunique(),
-        "md_que_luego_cerro_ads_n": len(md_que_luego_cerro_ads),
-        "md_que_luego_cerro_ads_pct": (len(md_que_luego_cerro_ads) / len(codes_aceptaron_md) * 100) if codes_aceptaron_md else 0.0,
-        "flips_rechazo_aceptacion": pd.DataFrame(flips),
-        "detalle_aceptadas": aceptadas[["Brand", "Code", "Date", "Tipo de MD Aceptado"]].rename(
-            columns={"Brand": "Marca", "Date": "Fecha"}
-        ) if "Tipo de MD Aceptado" in aceptadas.columns else aceptadas[["Brand", "Code", "Date"]].rename(
-            columns={"Brand": "Marca", "Date": "Fecha"}
-        ),
-    }
-
-
-# ─────────────────────────────────────────────────────────────
-# FUNNEL 3 — CHURN
-# ─────────────────────────────────────────────────────────────
-
-def _clasificar_churn(row):
-    """
-    Regla validada a mano contra CRUCE_PRO_SALES.xlsx (coincide exacto
-    con "4 de 7 retenidas, 57%" de la sesión de estudio):
-      - On Hold == 'NO'                                  -> Cerrada permanente
-      - On Hold == 'SI' y Fecha Reactivación == Date      -> Salvada en la llamada
-        (se resolvió en la misma llamada, nunca llegó a apagarse)
-      - On Hold == 'SI' y Fecha Reactivación != Date      -> Reactivación programada
-        (incluye fechas mal cargadas en el pasado -- ver nota en README:
-        Lo de Juan tenía la fecha mal cargada en el sistema pero se
-        confirmó verbalmente que sigue siendo reactivación programada,
-        no cerrada -- Eagle no puede saber eso solo, se marca como
-        "revisar" cuando la fecha queda en el pasado, ver campo
-        'revisar_fecha' abajo).
-    """
-    if row.get("On Hold") != "SI":
-        return "Cerrada permanente", False
-    fecha_react = row.get("Fecha Reactivación")
-    fecha_llamada = row.get("Date")
-    if pd.notna(fecha_react) and pd.notna(fecha_llamada) and fecha_react.date() == fecha_llamada.date():
-        return "Salvada en la llamada", False
-    revisar = bool(pd.notna(fecha_react) and pd.notna(fecha_llamada) and fecha_react.date() < fecha_llamada.date())
-    return "Reactivación programada", revisar
-
-
-def churn_funnel(productivity_df, farmer_email):
-    dfp = productivity_df[productivity_df["Farmer"] == farmer_email]
-    churn = dfp[dfp["Churn"] == "SI"].copy()
-
-    clasif = churn.apply(_clasificar_churn, axis=1, result_type="expand")
-    churn["Categoría"] = clasif[0]
-    churn["revisar_fecha"] = clasif[1]
-
-    # Una marca puede tener 2+ gestiones en la ventana (ej. Kyoto Sushi BA)
-    # -- para el conteo de marcas se toma la gestión MÁS RECIENTE de cada
-    # Code, que es la que manda sobre el estado final.
-    ultima_por_marca = churn.sort_values("Date").groupby("Code").tail(1)
-
-    retenidas = ultima_por_marca["Categoría"].isin(["Salvada en la llamada", "Reactivación programada"])
-    marcas_totales = ultima_por_marca["Code"].nunique()
-    marcas_retenidas = int(retenidas.sum())
-
-    detalle = ultima_por_marca[["Brand", "Code", "Date", "Categoría", "Motivo Churn", "revisar_fecha"]].rename(
-        columns={"Brand": "Marca", "Date": "Fecha última gestión", "Motivo Churn": "Motivo"}
-    )
-
-    return {
-        "gestiones": len(churn),
-        "marcas": marcas_totales,
-        "retenidas": marcas_retenidas,
-        "cerradas": marcas_totales - marcas_retenidas,
-        "tasa_retencion": (marcas_retenidas / marcas_totales * 100) if marcas_totales else 0.0,
-        "conteo_por_categoria": ultima_por_marca["Categoría"].value_counts().to_dict(),
-        "detalle": detalle,
-        "hay_fechas_a_revisar": bool(detalle["revisar_fecha"].any()),
-    }
-
-
-# ─────────────────────────────────────────────────────────────
-# MEZCLA DE PALANCAS — balance manual Ads / MD / Churn
-# ─────────────────────────────────────────────────────────────
-
-def mezcla_balance(ads_meta, ads_logrado, md_meta, md_logrado, churn_meta, churn_logrado):
-    """
-    Compara el % de cumplimiento de las 3 palancas. Ads es siempre el
-    objetivo primario -- si MD o Churn están sobrecumpliendo mucho más
-    que Ads, es señal de que se está gastando foco ahí en vez del
-    objetivo principal (no es malo per se, pero hay que saberlo).
-    """
-    def pct(meta, logrado):
-        return (logrado / meta * 100) if meta else 0.0
-
-    ads_pct = pct(ads_meta, ads_logrado)
-    md_pct = pct(md_meta, md_logrado)
-    churn_pct = pct(churn_meta, churn_logrado)
-
-    alertas = []
-    if md_pct > ads_pct + 30:
-        alertas.append("Markdown está muy por encima de Ads en % de cumplimiento — revisa si el foco se está yendo para el lado equivocado.")
-    if churn_pct > ads_pct + 30:
-        alertas.append("Churn está muy por encima de Ads en % de cumplimiento — buena señal de retención, pero confirma que Ads no se está quedando atrás por falta de tiempo.")
-    if ads_pct < 70:
-        alertas.append("Ads (palanca primaria) está por debajo del 70% de su meta — foco ahí antes que en las otras dos.")
-
-    return {
-        "ads_pct": ads_pct, "md_pct": md_pct, "churn_pct": churn_pct,
-        "alertas": alertas,
-    }
-
-
-# ─────────────────────────────────────────────────────────────
-# RADAR POST-LLAMADA — tracker de los 5 estados
-# ─────────────────────────────────────────────────────────────
-
-ESTADOS = {
-    "Cerrado": {"dias_seguimiento": None, "color": "#50B833"},               # verde (marca)
-    "Objeción con argumento": {"dias_seguimiento": 4, "color": "#86B3D8"},   # celeste (marca)
-    "Timing / no es el momento": {"dias_seguimiento": 12, "color": "#1E6EAF"},  # azul (marca)
-    "No contactado": {"dias_seguimiento": 1.5, "color": "#A2060A"},         # granate (marca)
-    "Cierre total": {"dias_seguimiento": 30, "color": "#8B8F97"},           # gris neutro — no viene en la franja del logo
-}
-
-TRACKER_COLUMNS = ["Marca", "Code", "Estado", "Fecha contacto", "Próximo contacto", "Notas", "Canal sugerido"]
-
-
-def _proximo_contacto(estado, fecha_contacto, dias_custom=None):
-    dias = dias_custom if dias_custom is not None else ESTADOS.get(estado, {}).get("dias_seguimiento")
-    if dias is None:
+def dias_habiles_entre(desde, hasta):
+    """Días hábiles transcurridos entre dos fechas (excluye el día de
+    inicio, cuenta el de llegada). Devuelve None si alguna es NaT."""
+    if pd.isna(desde) or pd.isna(hasta):
         return None
-    return (pd.Timestamp(fecha_contacto) + pd.Timedelta(days=dias)).date()
+    d0 = pd.Timestamp(desde).normalize()
+    d1 = pd.Timestamp(hasta).normalize()
+    if d1 < d0:
+        return 0
+    return int(np.busday_count(d0.date(), d1.date()))
 
 
-def nueva_entrada_tracker(marca, code, estado, fecha_contacto, notas="", dias_custom=None):
-    canal = "WhatsApp (cambiar de canal)" if estado == "No contactado" else ""
-    return {
-        "Marca": marca, "Code": code, "Estado": estado,
-        "Fecha contacto": pd.Timestamp(fecha_contacto).date(),
-        "Próximo contacto": _proximo_contacto(estado, fecha_contacto, dias_custom),
-        "Notas": notas, "Canal sugerido": canal,
-    }
-
-
-def load_tracker(path):
-    try:
-        df = pd.read_csv(path)
-        for c in ("Fecha contacto", "Próximo contacto"):
-            if c in df.columns:
-                df[c] = pd.to_datetime(df[c], errors="coerce").dt.date
-        return df
-    except FileNotFoundError:
-        return pd.DataFrame(columns=TRACKER_COLUMNS)
-
-
-def save_tracker(df, path):
-    df.to_csv(path, index=False)
-
-
-def tracker_vencidos(df, hoy=None):
-    if df.empty:
-        return df
-    hoy = hoy or pd.Timestamp.now().date()
-    d = df.copy()
-    d["Próximo contacto"] = pd.to_datetime(d["Próximo contacto"], errors="coerce").dt.date
-    return d[(d["Próximo contacto"].notna()) & (d["Próximo contacto"] <= hoy) & (d["Estado"] != "Cerrado")]
-
-
-# ─────────────────────────────────────────────────────────────
-# FUNNEL DE 4 NIVELES (Ads / Markdown) -- reemplaza el tablero de triage
-# plano (agosto 2026, noveno ajuste, pedido explícito de Sabas, con
-# descripción/estructura del funnel también suya). SÍ es un funnel real
-# esta vez (a diferencia del primer intento): cada nivel es un
-# subconjunto genuino del anterior, con "regla de oro" -- la suma de los
-# segmentos de cada nivel es EXACTAMENTE el total de ese nivel.
+# ═════════════════════════════════════════════════════════════
+# FUNNEL DE 4 NIVELES (Ads / Markdown)
+# ═════════════════════════════════════════════════════════════
+# Estructura y reglas pedidas explícitamente por Sabas (décimo ajuste,
+# con referencia visual incluida). Cada nivel es un subconjunto real del
+# anterior y la suma de los segmentos de su barra interna es EXACTAMENTE
+# el total de ese nivel ("regla de oro").
 #
-#   Nivel 1 -- Base (universo fijo del mes, ver actualizar_universo_mensual)
-#     = Sin Gestionar + No Contactado + Contactados-abiertos + Cerrados
-#   Nivel 2 -- Contactados-abiertos = Pipeline + Rechazado
-#   Nivel 3 -- Pipeline = Caliente + Frío
-#   Nivel 4 -- Cierre (independiente, NO se resta de los niveles de
-#     arriba -- ver nota de diseño abajo)
+#   Nivel 1 -- Base prospectada = Contactado + No Contactado + Sin Gestionar
+#       Contactado    : ¿Contactado?=SI Y la columna de la palanca (Ads /
+#                       Markdown) también =SI -- se habló de ESTA palanca.
+#       No Contactado : ¿Contactado?=NO (se intentó, no se logró).
+#       Sin Gestionar : ¿Contactado?=SI pero SIN tocar la palanca, o la
+#                       marca no tiene fila / el campo viene vacío.
 #
-# DECISIÓN DE DISEÑO (resolviendo una tensión real del propio ejemplo de
-# Sabas, donde Contactados=Pipeline+Rechazado sin restar Cierre en
-# ningún lado): Cierre se saca COMPLETO de la caja de Contactados/
-# Pipeline -- un cerrado no aparece como Pipeline ni como Rechazado, vive
-# solo en el bloque terminal de Cierre. Por eso "Contactados" tal como se
-# ve en el Nivel 2 ya NO incluye a los que cerraron -- para el footer
-# ("tasa de contacto real") sí hay que sumarlos de vuelta, tal como pedía
-# la nota original de Sabas ("no solo el nivel 2 renombrado").
+#   Nivel 2 -- Contactado = Pipeline + Rechazado
+#       Rechazado : tiene "No activo" Y más de 5 días hábiles desde el
+#                   primer contacto real con la palanca.
+#       Pipeline  : todo el resto de los contactados.
 #
-# Regla de antigüedad (Ads y Markdown, sin cambios respecto al ajuste
-# anterior, validada con ejemplos reales de Sabas):
-#   días_transcurridos = HOY − fecha del primer contacto REAL de esa
-#                         palanca específica
-#   Caliente:   0, 1 o 2 días  (día 1-3 de vida del lead)
-#   Frío:       3 o 4 días     (día 4-5)
-#   Rechazado:  5+ días, o más de 3 rechazos/no-activo en la ventana de
-#               5 días desde el primer contacto (lo que ocurra primero)
-#   -- este vencimiento es la misma "regla de loop" que describe Sabas:
-#   el prospecto no sale del sistema, se reclasifica como Rechazado
-#   dentro de Contactados.
+#   Nivel 3 -- Pipeline = Caliente + Frío  (días HÁBILES)
+#       Caliente : hasta 3 días hábiles
+#       Frío     : más de 3 días hábiles
 #
-# "Sin Gestionar" vs. "No Contactado" (distinción nueva de este ajuste):
-#   Sin Gestionar: la marca no tiene NINGUNA fila en Productivity --
-#     nunca se tocó nada, ni siquiera un intento fallido.
-#   No Contactado: sí hay fila(s) en Productivity, pero ninguna logró
-#     contacto real (¿Contactado?=SI) con la palanca específica tocada.
-# ─────────────────────────────────────────────────────────────
+#   Nivel 4 -- Cierre : los que aparecen en CHECKOUT (terminal).
+#
+# DECISIÓN DE DISEÑO, marcada explícita porque la spec no la cubría: un
+# contactado con "No activo" pero de 5 días hábiles o menos NO cae en
+# Rechazado (la regla exige >5 días) -- queda en Pipeline, clasificado
+# por su antigüedad como cualquier otro. Y un contactado de más de 5 días
+# SIN "No activo" tampoco cae en Rechazado -- queda en Frío. Cualquier
+# otra lectura dejaría marcas sin bucket y rompería la regla de oro.
 
-TRIAGE_ORDEN = ["Sin Gestionar", "No Contactado", "Caliente", "Frío", "Rechazado", "Cerrado"]
-TRIAGE_COLORES = {
-    # Pedido explícito de Sabas: Gris=No contactado, Rojo=Rechazado,
-    # Azul oscuro=Caliente, Azul claro=Frío, Verde=Cerrado. Sin Gestionar
-    # (categoría nueva de este ajuste) usa el mismo gris -- ambos son
-    # "todavía no entró a ningún proceso", incluso si son técnicamente
-    # distintos.
-    "Sin Gestionar": "gris",
-    "No Contactado": "gris",
-    "Caliente": "azul",       # azul oscuro
-    "Frío": "celeste",        # azul claro
-    "Rechazado": "red",       # rojo de marca
-    "Cerrado": "verde",
-}
+FUNNEL_ORDEN_L1 = ["Contactado", "No Contactado", "Sin Gestionar"]
+FUNNEL_ORDEN_L2 = ["Pipeline", "Rechazado"]
+FUNNEL_ORDEN_L3 = ["Caliente", "Frío"]
 
-# "La totalidad de prospectados debe ser fija todo el mes" (pedido
-# explícito de Sabas): el universo no se recalcula desde cero cada día
-# contra la hoja cruda -- se acumula en un CSV mensual (ver
-# actualizar_universo_mensual arriba) y esa lista acumulada es la que se
-# usa como universo real. Una marca que entró un día sigue contando el
-# resto del mes aunque después ya no cumpla el filtro crudo.
+COLS_TRIAGE = ["Brand ID", "Brand Name", "GMV", "Status"]
+
+UMBRAL_CALIENTE_HABILES = 3
+UMBRAL_RECHAZO_HABILES = 5
 
 
-COLS_TRIAGE = ["Brand ID", "Brand Name", "GMV", "Status", "Días", "Motivo"]
+def _clasificar_marca(key, nombre, gmv, marca_prod, es_cierre, col_señal, hoy):
+    """Devuelve (nivel1, nivel2, nivel3) para una marca. nivel2/nivel3
+    quedan en None si la marca no llega a ese nivel."""
+    if es_cierre:
+        return "Contactado", "Pipeline", "Cierre"
+
+    if marca_prod.empty:
+        return "Sin Gestionar", None, None
+
+    contacto_palanca = marca_prod[
+        (marca_prod["¿Contactado?"] == "SI") & (marca_prod[col_señal] == "SI")
+    ]
+    if not contacto_palanca.empty:
+        fecha_inicio = contacto_palanca["Date"].min()
+        dias = dias_habiles_entre(fecha_inicio, hoy) or 0
+        tiene_no_activo = (marca_prod.get("Tipo Never Ads") == "No activo").any() \
+            if "Tipo Never Ads" in marca_prod.columns else False
+        if tiene_no_activo and dias > UMBRAL_RECHAZO_HABILES:
+            return "Contactado", "Rechazado", None
+        nivel3 = "Caliente" if dias <= UMBRAL_CALIENTE_HABILES else "Frío"
+        return "Contactado", "Pipeline", nivel3
+
+    if (marca_prod["¿Contactado?"] == "NO").any():
+        return "No Contactado", None, None
+
+    return "Sin Gestionar", None, None
 
 
-def _triage_generico(universo_keys, nombre_map, gmv_map, cerrados_keys, prod_farmer, col_señal, col_rechazo, val_rechazo, hoy):
-    """
-    Motor compartido de clasificación -- Ads y Markdown usan exactamente
-    la misma lógica de antigüedad, solo cambia qué columna de Productivity
-    marca "se tocó la palanca" (col_señal) y cuál marca "rechazo/no activo"
-    (col_rechazo/val_rechazo) para el override de conteo. Cada fila sale
-    con GMV ya pegado (desde gmv_map, ver gmv_lookup) para poder ordenar
-    de mayor a menor GMV y pintar el pill verde en la UI.
-    """
+def _construir_funnel(universo_keys, nombre_map, gmv_map, cierre_keys, prod_farmer, col_señal, hoy):
     filas = []
     for key in universo_keys:
-        nombre = nombre_map.get(key, key)
-        gmv = gmv_map.get(key, 0.0)
-
-        if key in cerrados_keys:
-            filas.append({"Brand ID": key, "Brand Name": nombre, "GMV": gmv, "Status": "Cerrado", "Días": None, "Motivo": ""})
-            continue
-
         marca_prod = prod_farmer[prod_farmer["brand_key"] == key]
-
-        if marca_prod.empty:
-            filas.append({"Brand ID": key, "Brand Name": nombre, "GMV": gmv, "Status": "Sin Gestionar", "Días": None, "Motivo": ""})
-            continue
-
-        contacto_real = marca_prod[(marca_prod["¿Contactado?"] == "SI") & (marca_prod[col_señal] == "SI")]
-
-        if contacto_real.empty:
-            filas.append({"Brand ID": key, "Brand Name": nombre, "GMV": gmv, "Status": "No Contactado", "Días": None, "Motivo": ""})
-            continue
-
-        fecha_inicio = contacto_real["Date"].min()
-        dias = (hoy - fecha_inicio).days
-
-        # Override de conteo: rechazos/no-activo dentro de la ventana de
-        # 5 días desde el primer contacto (no desde hoy).
-        ventana = marca_prod[
-            (marca_prod["Date"] >= fecha_inicio)
-            & (marca_prod["Date"] <= fecha_inicio + pd.Timedelta(days=5))
-            & (marca_prod[col_rechazo] == val_rechazo)
-        ]
-        n_rechazos = len(ventana)
-
-        if dias >= 5 or n_rechazos > 3:
-            estado = "Rechazado"
-            motivo = f"{n_rechazos} rechazos en la ventana" if n_rechazos > 3 else f"{dias} días sin cerrar"
-        elif dias <= 2:
-            estado, motivo = "Caliente", ""
-        else:
-            estado, motivo = "Frío", ""
-
-        filas.append({"Brand ID": key, "Brand Name": nombre, "GMV": gmv, "Status": estado, "Días": int(dias), "Motivo": motivo})
-
-    df = pd.DataFrame(filas, columns=COLS_TRIAGE)
-    # Prioridad: mayor GMV primero, dentro de cada Status -- pedido
-    # explícito de Sabas ("organización de prioridad de mayor a menor GMV
-    # según su etapa").
-    return df.sort_values(["Status", "GMV"], ascending=[True, False]).reset_index(drop=True)
+        n1, n2, n3 = _clasificar_marca(
+            key, nombre_map.get(key, key), gmv_map.get(key, 0.0),
+            marca_prod, key in cierre_keys, col_señal, hoy,
+        )
+        filas.append({
+            "Brand ID": key, "Brand Name": nombre_map.get(key, key),
+            "GMV": gmv_map.get(key, 0.0), "N1": n1, "N2": n2, "N3": n3,
+        })
+    df = pd.DataFrame(filas, columns=["Brand ID", "Brand Name", "GMV", "N1", "N2", "N3"])
+    return df.sort_values("GMV", ascending=False).reset_index(drop=True)
 
 
-def funnel_counts(df_detalle):
-    """
-    Agrega la tabla plana de clasificación (una fila por marca, columna
-    Status con 6 valores posibles) a los números del funnel de 4 niveles.
-    Cierre se saca completo de Contactados/Pipeline (ver nota de diseño
-    arriba) -- por eso "tasa_contacto" recalcula sumando Cerrados de
-    vuelta, tal como pedía la nota original de Sabas.
-    """
-    c = df_detalle["Status"].value_counts() if len(df_detalle) else pd.Series(dtype=int)
-    sin_gestionar = int(c.get("Sin Gestionar", 0))
-    no_contactado = int(c.get("No Contactado", 0))
-    caliente = int(c.get("Caliente", 0))
-    frio = int(c.get("Frío", 0))
-    rechazado = int(c.get("Rechazado", 0))
-    cerrado = int(c.get("Cerrado", 0))
+def funnel_niveles(df):
+    """Arma los 4 niveles listos para pintar. Cada nivel trae su total,
+    los segmentos de su barra interna (nombre, n, %), y el subconjunto de
+    marcas que le corresponde con su Status para la tabla lateral."""
+    n_cierre = int((df["N3"] == "Cierre").sum())
+    n_contactado = int((df["N1"] == "Contactado").sum())
+    n_pipeline = int((df["N2"] == "Pipeline").sum())
 
-    pipeline = caliente + frio
-    contactados = pipeline + rechazado           # "Contactados-abiertos" del Nivel 2 -- excluye cerrados
-    base = sin_gestionar + no_contactado + contactados + cerrado
+    def segs(pares):
+        total = sum(n for _, n in pares) or 1
+        return [{"label": lab, "n": n, "pct": n / total * 100} for lab, n in pares]
 
-    contactados_reales = contactados + cerrado    # para el footer, ver nota de diseño
+    base_tbl = df.assign(Status=df["N1"])
+    cont_tbl = df[df["N1"] == "Contactado"].assign(
+        Status=lambda d: d["N2"].fillna("Pipeline"))
+    pipe_tbl = df[df["N2"] == "Pipeline"].assign(
+        Status=lambda d: d["N3"].fillna("Pipeline"))
+    cierre_tbl = df[df["N3"] == "Cierre"].assign(Status="Cerrado")
 
-    return {
-        "base": base,
-        "sin_gestionar": sin_gestionar, "no_contactado": no_contactado,
-        "contactados": contactados, "cerrado": cerrado,
-        "pipeline": pipeline, "rechazado": rechazado,
-        "caliente": caliente, "frio": frio,
-        "tasa_contacto": (contactados_reales / base * 100) if base else 0.0,
-        "cierre_sobre_contactados": (cerrado / contactados_reales * 100) if contactados_reales else 0.0,
-        "cierre_sobre_base": (cerrado / base * 100) if base else 0.0,
-    }
+    return [
+        {
+            "key": "base", "titulo": "Base prospectada", "total": len(df),
+            "sub": "100%",
+            "segmentos": segs([(l, int((df["N1"] == l).sum())) for l in FUNNEL_ORDEN_L1]),
+            "tabla": base_tbl,
+        },
+        {
+            "key": "contactado", "titulo": "Contactados", "total": n_contactado,
+            "sub": f"{(n_contactado / len(df) * 100) if len(df) else 0:.1f}% de la base",
+            "segmentos": segs([(l, int((df["N2"] == l).sum())) for l in FUNNEL_ORDEN_L2]),
+            "tabla": cont_tbl,
+        },
+        {
+            "key": "pipeline", "titulo": "Pipeline", "total": n_pipeline,
+            "sub": f"de {n_contactado} contactados",
+            "segmentos": segs([
+                ("Caliente", int((df["N3"] == "Caliente").sum())),
+                ("Frío", int((df["N3"] == "Frío").sum())),
+                ("Cierre", n_cierre),
+            ]),
+            "tabla": pipe_tbl,
+        },
+        {
+            "key": "cierre", "titulo": "Cierre", "total": n_cierre,
+            "sub": f"{(n_cierre / len(df) * 100) if len(df) else 0:.1f}% de la base",
+            "segmentos": [], "tabla": cierre_tbl,
+        },
+    ]
 
 
-def triage_ads(ads_df, productivity_df, checkout_df, farmer_email, gmv_map=None, universo_path=None, hoy=None):
-    """
-    Universo: ADS.% Att. Bookings == 0 (parseado), ACUMULADO mes a mes
-    (ver actualizar_universo_mensual) -- no se recalcula crudo cada vez.
-    Cerrado: Checkout con Tipo de Contratacion="Adquisicion" para este
-    Farmer. Señal de que se tocó la palanca: Productivity.Ads=="SI".
-    Override de rechazo: Tipo Never Ads=="No activo".
-    """
+def funnel_ads(ads_df, productivity_df, checkout_df, farmer_email, gmv_map=None, universo_path=None, hoy=None):
     hoy = pd.Timestamp(hoy) if hoy is not None else pd.Timestamp.now().normalize()
     gmv_map = gmv_map or {}
-
     prod = productivity_df[productivity_df["Farmer"] == farmer_email].copy()
     prod["brand_key"] = prod["Code"].apply(_brand_key)
 
     d = ads_df.copy()
     if d.empty or "BRAND" not in d.columns:
-        return pd.DataFrame(columns=COLS_TRIAGE)
+        return pd.DataFrame(columns=["Brand ID", "Brand Name", "GMV", "N1", "N2", "N3"])
     d["brand_key"] = d["BRAND"].apply(_brand_key)
     d["att_pct"] = d["% Att. Bookings"].apply(_parse_pct)
-    hoy_califican = d[(d["att_pct"] == 0) & (d["brand_key"] != "")]
-    nuevos = dict(zip(hoy_califican["brand_key"], hoy_califican["BRAND"]))
+    califican = d[(d["att_pct"] == 0) & (d["brand_key"] != "")]
+    nuevos = dict(zip(califican["brand_key"], califican["BRAND"]))
+    nombre_map = actualizar_universo_mensual(nuevos, universo_path) if universo_path else nuevos
 
-    if universo_path:
-        nombre_map = actualizar_universo_mensual(nuevos, universo_path)
-    else:
-        nombre_map = nuevos  # sin persistencia (ej. tests) -- se comporta como antes
-    universo_keys = sorted(nombre_map.keys())
-
-    cerrados_keys = set()
-    chk = checkout_df.copy()
+    cierre_keys = set()
+    chk = checkout_df
     if not chk.empty and {"FARMER", "Tipo de Contratacion", "brand_key"}.issubset(chk.columns):
-        chk = chk[(chk["FARMER"] == farmer_email) & (chk["Tipo de Contratacion"] == "Adquisicion")]
-        cerrados_keys = set(chk["brand_key"])
+        cierre_keys = set(chk[chk["FARMER"] == farmer_email]["brand_key"])
 
-    return _triage_generico(universo_keys, nombre_map, gmv_map, cerrados_keys, prod, "Ads", "Tipo Never Ads", "No activo", hoy)
+    return _construir_funnel(sorted(nombre_map), nombre_map, gmv_map, cierre_keys, prod, "Ads", hoy)
 
 
-def triage_md(md_df, productivity_df, farmer_email, gmv_map=None, universo_path=None, hoy=None):
-    """
-    Universo: MD.MARKDOWN % es NaN o == 0 (parseado), ACUMULADO mes a mes
-    igual que Ads. Cerrado: Productivity ¿Se aceptó lo ofrecido?=="Sí" al
-    menos una vez (vive en Productivity, no hace falta cruzar con
-    Checkout). Señal: Productivity.Markdown=="SI". Override de rechazo:
-    ¿Se aceptó lo ofrecido?=="No aceptó ninguno".
-    """
+def funnel_md(md_df, productivity_df, checkout_df, farmer_email, gmv_map=None, universo_path=None, hoy=None):
     hoy = pd.Timestamp(hoy) if hoy is not None else pd.Timestamp.now().normalize()
     gmv_map = gmv_map or {}
-
     prod = productivity_df[productivity_df["Farmer"] == farmer_email].copy()
     prod["brand_key"] = prod["Code"].apply(_brand_key)
 
     d = md_df.copy()
     if d.empty or "BRAND ID" not in d.columns:
-        return pd.DataFrame(columns=COLS_TRIAGE)
+        return pd.DataFrame(columns=["Brand ID", "Brand Name", "GMV", "N1", "N2", "N3"])
     d["brand_key"] = d["BRAND ID"].apply(_brand_key)
     d["md_pct"] = d["MARKDOWN %"].apply(_parse_pct)
-    hoy_califican = d[(d["md_pct"].isna() | (d["md_pct"] == 0)) & (d["brand_key"] != "")]
-    nuevos = dict(zip(hoy_califican["brand_key"], hoy_califican["BRAND NAME"]))
+    califican = d[(d["md_pct"].isna() | (d["md_pct"] == 0)) & (d["brand_key"] != "")]
+    nuevos = dict(zip(califican["brand_key"], califican["BRAND NAME"]))
+    nombre_map = actualizar_universo_mensual(nuevos, universo_path) if universo_path else nuevos
 
-    if universo_path:
-        nombre_map = actualizar_universo_mensual(nuevos, universo_path)
-    else:
-        nombre_map = nuevos
-    universo_keys = sorted(nombre_map.keys())
+    # Cierre de MD: la aceptación vive en Productivity, no en Checkout.
+    cierre_keys = set(prod[prod["¿Se aceptó lo ofrecido?"] == "Sí"]["brand_key"])
 
-    aceptadas = prod[prod["¿Se aceptó lo ofrecido?"] == "Sí"]
-    cerrados_keys = set(aceptadas["brand_key"])
-
-    return _triage_generico(
-        universo_keys, nombre_map, gmv_map, cerrados_keys, prod,
-        "Markdown", "¿Se aceptó lo ofrecido?", "No aceptó ninguno", hoy,
-    )
+    return _construir_funnel(sorted(nombre_map), nombre_map, gmv_map, cierre_keys, prod, "Markdown", hoy)
 
 
-def triage_churn(churn_df, productivity_df, farmer_email, gmv_map=None):
-    """
-    3 bloques de SEVERIDAD, no de antigüedad (sin reloj de días, pedido
-    explícito de Sabas): PW1, Churn, Recuperada. Universo: la propia hoja
-    CHURN (Estado Actual = "Prevention W1" o "Churn"). Recuperada: entre
-    ese mismo universo, cualquiera con On Hold="SI" en Productivity —
-    "sin importar fecha" (no filtra si Fecha Reactivación quedó en el
-    pasado o el futuro, solo si existe la señal) — tiene prioridad sobre
-    PW1/Churn (partición mutuamente excluyente, sin doble conteo).
+# ═════════════════════════════════════════════════════════════
+# FUNNEL DE CHURN (3 niveles) -- estructura propia, pedida explícitamente
+# ═════════════════════════════════════════════════════════════
+#   Nivel 1 -- Prospectados = PW1 + Churn (hoja CHURN).
+#              Barra interna: Contactado / No Contactado / Sin Gestionar.
+#   Nivel 2 -- Contactados = los de arriba con contacto en Productivity.
+#              Barra interna: Se reactiva (On Hold=SI) / Cerrado
+#              permanente (On Hold=NO).
+#   Nivel 3 -- Retenidos = solo los que figuran como "se reactiva".
 
-    Mismas columnas que triage_ads/triage_md (Brand ID/Brand Name/GMV/
-    Status) para que la UI trate a las 3 palancas de forma uniforme.
-    """
+def funnel_churn(churn_df, productivity_df, farmer_email, gmv_map=None):
     gmv_map = gmv_map or {}
     ch = churn_df.copy()
     if ch.empty or "COUNTRY_BRAND_ID" not in ch.columns:
-        return pd.DataFrame(columns=["Brand ID", "Brand Name", "GMV", "Status"])
+        return pd.DataFrame(columns=["Brand ID", "Brand Name", "GMV", "N1", "N2", "Estado Churn"])
     if "FARMER" in ch.columns:
-        # La hoja CHURN trae el Farmer SIN dominio ("sabas.ramirez"), a
-        # diferencia de Productivity/Checkout que sí usan el correo
-        # completo ("sabas.ramirez@rappi.com") -- inconsistencia real
-        # entre hojas del propio export, no un bug de acá. Se compara
-        # solo por la parte local, insensible a mayúsculas.
-        local_farmer = str(farmer_email).split("@")[0].strip().lower()
-        ch = ch[ch["FARMER"].astype(str).str.strip().str.lower() == local_farmer]
+        local = str(farmer_email).split("@")[0].strip().lower()
+        ch = ch[ch["FARMER"].astype(str).str.strip().str.lower() == local]
     ch["brand_key"] = ch["COUNTRY_BRAND_ID"].apply(_brand_key)
 
-    prod = productivity_df[
-        (productivity_df["Farmer"] == farmer_email) & (productivity_df["Churn"] == "SI")
-    ].copy()
+    # BUG ENCONTRADO Y CORREGIDO: antes esto filtraba prod por
+    # Churn=="SI", pero las marcas que hoy están en la hoja CHURN casi no
+    # tienen filas marcadas así (esas filas corresponden a gestiones de
+    # churn de OTRAS marcas, en otro momento). La spec dice "cuántos de
+    # los PW1 y los Churn tienen contacto en productivity" -- sin
+    # restringir el tipo de fila -- así que se mira TODA la actividad de
+    # la marca. Con el filtro viejo, el nivel 2 daba 0 siempre.
+    prod = productivity_df[productivity_df["Farmer"] == farmer_email].copy()
     prod["brand_key"] = prod["Code"].apply(_brand_key)
-    reactivadas_keys = set(prod[prod["On Hold"] == "SI"]["brand_key"])
 
     filas = []
     for _, row in ch.iterrows():
         key = row["brand_key"]
-        nombre = row.get("BRAND_NAME", key)
-        if key in reactivadas_keys:
-            estado = "Recuperada"
-        elif row.get("Estado Actual") == "Prevention W1":
-            estado = "PW1"
-        else:
-            estado = "Churn"
-        filas.append({"Brand ID": key, "Brand Name": nombre, "GMV": gmv_map.get(key, 0.0), "Status": estado})
+        mp = prod[prod["brand_key"] == key]
+        estado_churn = "PW1" if row.get("Estado Actual") == "Prevention W1" else "Churn"
 
-    df = pd.DataFrame(filas, columns=["Brand ID", "Brand Name", "GMV", "Status"])
-    return df.sort_values(["Status", "GMV"], ascending=[True, False]).reset_index(drop=True)
+        if mp.empty:
+            n1, n2 = "Sin Gestionar", None
+        elif (mp["¿Contactado?"] == "SI").any():
+            n1 = "Contactado"
+            n2 = "Se reactiva" if (mp["On Hold"] == "SI").any() else "Cerrado permanente"
+        elif (mp["¿Contactado?"] == "NO").any():
+            n1, n2 = "No Contactado", None
+        else:
+            n1, n2 = "Sin Gestionar", None
+
+        filas.append({
+            "Brand ID": key, "Brand Name": row.get("BRAND_NAME", key),
+            "GMV": gmv_map.get(key, 0.0), "N1": n1, "N2": n2,
+            "Estado Churn": estado_churn,
+        })
+
+    df = pd.DataFrame(filas, columns=["Brand ID", "Brand Name", "GMV", "N1", "N2", "Estado Churn"])
+    return df.sort_values("GMV", ascending=False).reset_index(drop=True)
+
+
+def funnel_churn_niveles(df):
+    n_cont = int((df["N1"] == "Contactado").sum())
+    n_ret = int((df["N2"] == "Se reactiva").sum())
+
+    def segs(pares):
+        total = sum(n for _, n in pares) or 1
+        return [{"label": lab, "n": n, "pct": n / total * 100} for lab, n in pares]
+
+    return [
+        {
+            "key": "prospectados", "titulo": "Prospectados (PW1 + Churn)", "total": len(df),
+            "sub": "100%",
+            "segmentos": segs([(l, int((df["N1"] == l).sum())) for l in FUNNEL_ORDEN_L1]),
+            "tabla": df.assign(Status=df["N1"]),
+        },
+        {
+            "key": "contactados", "titulo": "Contactados", "total": n_cont,
+            "sub": f"{(n_cont / len(df) * 100) if len(df) else 0:.1f}% de prospectados",
+            "segmentos": segs([
+                ("Se reactiva", int((df["N2"] == "Se reactiva").sum())),
+                ("Cerrado permanente", int((df["N2"] == "Cerrado permanente").sum())),
+            ]),
+            "tabla": df[df["N1"] == "Contactado"].assign(Status=lambda d: d["N2"]),
+        },
+        {
+            "key": "retenidos", "titulo": "Retenidos", "total": n_ret,
+            "sub": f"{(n_ret / len(df) * 100) if len(df) else 0:.1f}% de prospectados",
+            "segmentos": [],
+            "tabla": df[df["N2"] == "Se reactiva"].assign(Status="Se reactiva"),
+        },
+    ]
