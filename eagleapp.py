@@ -27,6 +27,29 @@ st.markdown(build_css(), unsafe_allow_html=True)
 
 DATA_PATH = os.path.join("data", "CRUCE_PRO_SALES.xlsx")
 
+
+def encontrar_datos():
+    """
+    Busca el Excel del cruce sin depender de un nombre exacto. Se hace
+    así a propósito: en el deploy real el archivo no llegaba al repo por
+    un `.gitignore` que lo excluía, y después el problema se movía al
+    nombre exacto -- con esto, cualquier .xlsx que esté en data/ o en la
+    raíz del repo sirve, sin importar cómo se llame.
+
+    Devuelve (ruta, lista_de_candidatos_encontrados).
+    """
+    if os.path.exists(DATA_PATH):
+        return DATA_PATH, [DATA_PATH]
+
+    candidatos = []
+    for carpeta in ("data", "."):
+        if not os.path.isdir(carpeta):
+            continue
+        for f in sorted(os.listdir(carpeta)):
+            if f.lower().endswith((".xlsx", ".xlsm")) and not f.startswith("~$"):
+                candidatos.append(os.path.join(carpeta, f))
+    return (candidatos[0] if candidatos else None), candidatos
+
 # Anchos de cada nivel del funnel -- se van angostando para reforzar la
 # forma de embudo (pedido explícito: "que se logren distinguir las barras
 # angostándose").
@@ -140,10 +163,22 @@ with col_sidebar:
             unsafe_allow_html=True,
         )
 
-        if not os.path.exists(DATA_PATH):
-            st.error(f"No encontré {DATA_PATH} en el repo.")
+        ruta_datos, candidatos = encontrar_datos()
+        if not ruta_datos:
+            aqui = os.getcwd()
+            try:
+                en_data = sorted(os.listdir("data")) if os.path.isdir("data") else ["(no existe la carpeta data/)"]
+            except OSError as e:
+                en_data = [f"(error leyendo data/: {e})"]
+            st.error("No encontré ningún .xlsx en el repo.")
+            st.caption(f"Buscando desde: `{aqui}`")
+            st.caption("Contenido de `data/`: " + ", ".join(f"`{x}`" for x in en_data))
+            st.caption(
+                "Subí el archivo del cruce a `data/` y revisá que `.gitignore` "
+                "no lo esté excluyendo."
+            )
             st.stop()
-        hojas = dl.load_cruce(DATA_PATH)
+        hojas = dl.load_cruce(ruta_datos)
         productivity, checkout = hojas["productivity"], hojas["checkout"]
 
         ams = dl.farmers_disponibles(productivity)
