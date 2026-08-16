@@ -21,6 +21,7 @@ import re
 
 import numpy as np
 import pandas as pd
+import streamlit as st
 
 
 # ─────────────────────────────────────────────────────────────
@@ -38,6 +39,7 @@ SHEET_ALIASES = {
 }
 
 
+@st.cache_data(ttl="10m", show_spinner=False)
 def load_cruce(file_like_or_path):
     """
     Carga el Excel de 5 hojas por NOMBRE (no por ancho -- el formato viejo
@@ -158,6 +160,7 @@ def _parse_money(value):
         return 0.0
 
 
+@st.cache_data(show_spinner=False)
 def gmv_lookup(md_df):
     """Diccionario {brand_key: gmv} construido desde MD.'GMV TOTAL $' --
     se usa como referencia de GMV para las 3 tablas de triage (Ads, MD,
@@ -470,6 +473,7 @@ def funnel_niveles(df):
     ]
 
 
+@st.cache_data(show_spinner=False)
 def funnel_ads(ads_df, productivity_df, checkout_df, farmer_email, gmv_map=None, universo_path=None, hoy=None):
     hoy = pd.Timestamp(hoy) if hoy is not None else pd.Timestamp.now().normalize()
     gmv_map = gmv_map or {}
@@ -493,6 +497,7 @@ def funnel_ads(ads_df, productivity_df, checkout_df, farmer_email, gmv_map=None,
     return _construir_funnel(sorted(nombre_map), nombre_map, gmv_map, cierre_keys, prod, "Ads", hoy)
 
 
+@st.cache_data(show_spinner=False)
 def funnel_md(md_df, productivity_df, checkout_df, farmer_email, gmv_map=None, universo_path=None, hoy=None):
     hoy = pd.Timestamp(hoy) if hoy is not None else pd.Timestamp.now().normalize()
     gmv_map = gmv_map or {}
@@ -524,6 +529,7 @@ def funnel_md(md_df, productivity_df, checkout_df, farmer_email, gmv_map=None, u
 #              permanente (On Hold=NO).
 #   Nivel 3 -- Retenidos = solo los que figuran como "se reactiva".
 
+@st.cache_data(show_spinner=False)
 def funnel_churn(churn_df, productivity_df, farmer_email, gmv_map=None):
     gmv_map = gmv_map or {}
     ch = churn_df.copy()
@@ -645,6 +651,7 @@ def _pct_por_rango(valor, rangos):
     return None
 
 
+@st.cache_data(show_spinner=False)
 def load_recommended_budgets(file_like_or_path):
     """Lee la hoja 'RECOMMENDED BUDGETS' -- dos tablas apiladas en las
     mismas 2 columnas: rangos de ARS$ VENTAS -> % recomendado (Ads), y
@@ -742,6 +749,7 @@ def cvr_lookup(cvr_df):
     return out
 
 
+@st.cache_data(show_spinner=False)
 def load_cvr(file_like_or_path):
     """Lee la hoja '%CVR' del cruce por nombre (case-insensitive). Hoja
     ausente -> DataFrame vacío, no revienta."""
@@ -756,6 +764,7 @@ def load_cvr(file_like_or_path):
         return pd.DataFrame()
 
 
+@st.cache_data(show_spinner=False)
 def cvr_por_brand_key(md_df, cvr_df):
     """{brand_key: %CVR} combinando el nombre crudo de MD con el valor de
     la hoja %CVR -- puente entre las dos hojas, que no comparten Brand ID."""
@@ -782,6 +791,7 @@ def _parse_presupuesto_valor(valor_crudo):
     return ("monto", _parse_money(s))
 
 
+@st.cache_data(show_spinner=False)
 def presupuesto_valor_por_brand(checkout_df, farmer_email):
     """{brand_key: (tipo, valor)} desde Checkout.Presupuesto para este
     Account Manager. Con más de una fila de Checkout por marca, se

@@ -330,8 +330,8 @@ col_main.__enter__()
 header(dl.farmer_display(am), "Leads")
 
 gmv_map = dl.gmv_lookup(hojas["md"])
-f_ads = dl.funnel_ads(hojas["ads"], productivity, checkout, am, gmv_map, dl.universo_mensual_path("ads"))
-f_md = dl.funnel_md(hojas["md"], productivity, checkout, am, gmv_map, dl.universo_mensual_path("md"))
+f_ads = dl.funnel_ads(hojas["ads"], productivity, checkout, am, gmv_map, dl.universo_mensual_path("ads"), hoy=hoy)
+f_md = dl.funnel_md(hojas["md"], productivity, checkout, am, gmv_map, dl.universo_mensual_path("md"), hoy=hoy)
 f_churn = dl.funnel_churn(hojas["churn"], productivity, am, gmv_map)
 
 # Inversión (Pipeline) y Cerrado (Cierre) -- rangos de RECOMMENDED
