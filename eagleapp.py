@@ -318,11 +318,34 @@ with col_sidebar:
         st.caption(f"📅 Hoy: {hoy.date()}")
         st.caption(f"Ventana: {desde.date()} → {hoy.date()} ({dl.dias_habiles_entre(desde, hoy)} días hábiles)")
 
+        # Visibilidad del universo acumulado -- BUG REAL ENCONTRADO
+        # (pedido explícito de Sabas: "no me está dando los datos
+        # reales"): el universo fijo del mes vive en un CSV en disco que
+        # se ACUMULA, nunca se recalcula desde cero (por diseño -- "una
+        # marca que calificó un día sigue contando el resto del mes").
+        # Si la app corrió con archivos de PRUEBA distintos dentro del
+        # mismo mes (algo que pasó en esta misma sesión de trabajo), ese
+        # acumulado queda mezclado con marcas que no existen en el
+        # archivo real de hoy -- silenciosamente, sin ningún aviso en
+        # pantalla. Se muestra el conteo acá para que sea visible.
+        n_ads_univ = len(dl.leer_universo_mensual(dl.universo_mensual_path("ads")))
+        n_md_univ = len(dl.leer_universo_mensual(dl.universo_mensual_path("md")))
+        st.caption(f"🗂️ Universo acumulado: {n_ads_univ} (Ads) · {n_md_univ} (MD)")
+
         st.markdown('<div class="logout-anchor">', unsafe_allow_html=True)
-        if st.button("↺ Reiniciar", use_container_width=True):
+        if st.button("↺ Reiniciar universo del mes", use_container_width=True):
             for k in list(st.session_state.keys()):
                 st.session_state.pop(k, None)
+            # El botón viejo solo limpiaba session_state -- NO tocaba
+            # estos archivos, que son justo donde vivía la contaminación
+            # real. Ahora sí se borran los dos.
+            for palanca in ("ads", "md"):
+                p = dl.universo_mensual_path(palanca)
+                if os.path.exists(p):
+                    os.remove(p)
+            st.cache_data.clear()
             st.rerun()
+        st.caption("Borra el universo acumulado de Ads/MD y vuelve a construirlo desde cero con el archivo de hoy.")
         st.markdown("</div>", unsafe_allow_html=True)
 
 col_main.__enter__()

@@ -185,6 +185,21 @@ def universo_mensual_path(palanca, carpeta="data", hoy=None):
     return os.path.join(carpeta, f"universo_{palanca}_{hoy.strftime('%Y-%m')}.csv")
 
 
+def leer_universo_mensual(path):
+    """Lee el universo acumulado tal cual está en disco ahora mismo, sin
+    modificarlo -- para mostrarlo en la UI (sidebar) y que la
+    acumulación deje de ser invisible. A propósito SIN @st.cache_data:
+    tiene que reflejar el archivo real al instante, incluso justo
+    después de borrarlo con "Reiniciar universo del mes"."""
+    if not os.path.exists(path):
+        return {}
+    try:
+        prev = pd.read_csv(path, dtype=str)
+        return dict(zip(prev["brand_key"], prev["nombre"]))
+    except (pd.errors.EmptyDataError, KeyError):
+        return {}
+
+
 def actualizar_universo_mensual(nuevos_keys_nombres, path):
     """
     Acumula el universo de "Prospectados" contra lo que ya estaba
