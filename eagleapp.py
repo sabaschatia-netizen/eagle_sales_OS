@@ -16,6 +16,7 @@ Correr local:
 """
 
 import os
+import re
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -178,18 +179,19 @@ def _segmentos_clicables(segmentos, key_prefix, seleccion_actual):
     clickeado = None
     for col, (status, n) in zip(cols, segmentos):
         color = COLORS[dl.TRIAGE_COLORES.get(status, "gris")]
+        slug = re.sub(r"[^a-zA-Z0-9]+", "_", status).strip("_")  # 'Sin Gestionar' -> 'Sin_Gestionar' (antes solo se sanitizaba en algunos lugares, no en la key del boton -- quedaban keys distintas para el mismo botón)
         with col:
             st.markdown(
                 f"""<style>
-                .st-key-{key_prefix}_{status.replace(" ", "_")} .stButton button {{
+                .st-key-{key_prefix}_{slug} .stButton button {{
                     background:{color} !important; color:#fff !important; border:none !important;
                     {'outline:2px solid ' + COLORS["text"] + ' !important;' if status == seleccion_actual else ''}
                 }}
                 </style>""",
                 unsafe_allow_html=True,
             )
-            with st.container(key=f"{key_prefix}_{status.replace(' ', '_')}"):
-                if st.button(f"{status}\n{n}", key=f"btn_{key_prefix}_{status}", use_container_width=True):
+            with st.container(key=f"{key_prefix}_{slug}"):
+                if st.button(f"{status}\n{n}", key=f"btn_{key_prefix}_{slug}", use_container_width=True):
                     clickeado = status
     return clickeado
 
