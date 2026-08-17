@@ -157,6 +157,9 @@ def build_css(login=False):
     C = COLORS
     LOGIN_BG_CSS = (
         f'[data-testid="stAppViewContainer"] {{ background: {C["violeta"]} !important; }}'
+        f'[data-testid="stAppViewContainer"] [data-testid="stMainBlockContainer"] {{'
+        f'  display: flex; align-items: center; min-height: 100vh;'
+        f'}}'
         if login else ""
     )
     return f"""
@@ -387,6 +390,22 @@ def build_css(login=False):
        una estructura de DOM que no está garantizada dentro del iframe
        de Streamlit; un flag explícito en Python es 100% confiable. */
     {LOGIN_BG_CSS}
+    /* Simetría real: el bloque completo (logo + campos) se centra
+       verticalmente en TODA la altura de la pantalla -- antes cada
+       columna tenía su propio padding-top adivinado en vh (14 vs 22),
+       que nunca podía coincidir exacto y por eso "Correo" arrancaba más
+       abajo que el logo. El centrado vertical de página completa vive
+       en LOGIN_BG_CSS (arriba), condicionado a login=True -- si
+       viviera acá suelto, se aplicaría también a Leads/Outreach/
+       Second Chance y les rompería el layout normal. Acá solo queda lo
+       que SÍ es exclusivo de la estructura interna del login: las
+       columnas de Streamlit alineadas por el centro entre sí.
+       display:flex también en .login-box padre. */
+    .login-box {{ width: 100%; }}
+    .login-box [data-testid="stHorizontalBlock"] {{
+        display: flex !important; align-items: center !important;
+    }}
+    .login-logo-col, .login-form-col {{ display: flex; flex-direction: column; justify-content: center; }}
     .login-logo {{ display: flex; justify-content: flex-start; margin-bottom: 22px; }}
     .login-title {{ font-size: 26px; font-weight: 800; color: {C['white']};
         letter-spacing: -0.6px; margin-bottom: 6px; text-align: left; }}
