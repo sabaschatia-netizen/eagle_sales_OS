@@ -43,7 +43,7 @@ def render_login():
         st.markdown('<div class="login-box">', unsafe_allow_html=True)
         st.markdown(
             f'<div style="text-align:center;padding-top:8vh;">'
-            f'<div class="login-logo">{logo_img(72)}</div>'
+            f'<div class="login-logo">{logo_img(180)}</div>'
             f'<div class="login-sub">Ingresá con tu correo y contraseña<br>de Rappi para ver tu cartera.</div>'
             f"</div>",
             unsafe_allow_html=True,
@@ -253,7 +253,6 @@ COLUMNAS_EXTRA = {
 
 def tabla_lateral(df_tabla, titulo, nivel_key=None, ctx=None):
     st.markdown(f"##### Marcas en: {titulo}")
-    st.caption(f"{len(df_tabla)} marca(s) — ordenadas de mayor a menor GMV.")
     if not len(df_tabla):
         st.markdown('<div class="tbl-box"></div>', unsafe_allow_html=True)
         return
@@ -624,7 +623,6 @@ def tabla_outreach(df, titulo):
     st.dataframe muestre un color por celda Y sea de solo lectura al
     mismo tiempo con esta granularidad, así que se arma a mano, igual
     que ya se resolvió para las pills de Leads."""
-    st.caption(f"{len(df)} marca(s) — tal como están tipificadas en el Excel, sin editar acá.")
     if not len(df):
         st.markdown('<div class="tbl-box"></div>', unsafe_allow_html=True)
         return
