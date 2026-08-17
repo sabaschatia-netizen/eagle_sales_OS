@@ -10,7 +10,7 @@ Paleta base (hex exactos de la referencia):
   #CDF43D lima · #F4743C coral
 """
 
-from logo_asset import EAGLE_LOGO_B64
+from logo_asset import EAGLE_LOGO_B64, EAGLE_LOGO_LOADER_B64
 
 COLORS = {
     "bg": "#F7F6FB",
@@ -138,10 +138,15 @@ GOOGLE_FONTS_URL = "https://fonts.googleapis.com/css2?family=Poppins:wght@400;50
 
 
 def logo_img(width=64):
+    """Logo ORIGINAL (blanco sobre transparente) -- sidebar y header,
+    sin tocar. NO el mismo que usa el loader (ver EAGLE_LOGO_URI)."""
     return f'<img src="data:image/png;base64,{EAGLE_LOGO_B64}" width="{width}" style="display:block;">'
 
 
-EAGLE_LOGO_URI = "data:image/png;base64," + EAGLE_LOGO_B64
+# Usado SOLO por render_loading_watcher() en eagleapp.py -- pedido
+# explícito de Sabas: "solo en los loaders era el nuevo logo", el resto
+# de la app (sidebar, header) se queda con el logo original de siempre.
+EAGLE_LOGO_URI = "data:image/png;base64," + EAGLE_LOGO_LOADER_B64
 
 
 def favicon():
