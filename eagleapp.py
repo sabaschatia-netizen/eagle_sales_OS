@@ -24,9 +24,55 @@ import data_layer as dl
 from theme import COLORS, OUTREACH_PILL_STYLES, PILL_STYLES, SEGMENT_COLORS, build_css, favicon, logo_img
 
 st.set_page_config(page_title="Eagle", page_icon=favicon(), layout="wide", initial_sidebar_state="collapsed")
-st.markdown(build_css(), unsafe_allow_html=True)
 
 DATA_PATH = os.path.join("data", "CRUCE_PRO_SALES.xlsx")
+
+
+# ─────────────────────────────────────────────────────────────
+# LOGIN — "por seguridad de datos" (pedido explícito de Sabas). Mismo
+# patrón de identificación que ya usa Wingman (render_login() en
+# wingmanapp.py: correo + contraseña, sin hash, sin selector de rol
+# porque acá es un solo usuario) -- simplificado porque Eagle no tiene
+# equipo ni roles, solo Sabas. Credenciales fijas en data_layer.py.
+# ─────────────────────────────────────────────────────────────
+
+def render_login():
+    st.markdown(build_css(login=True), unsafe_allow_html=True)
+    _, mid, _ = st.columns([1, 1.15, 1])
+    with mid:
+        st.markdown('<div class="login-box">', unsafe_allow_html=True)
+        st.markdown(
+            f'<div style="text-align:center;padding-top:8vh;">'
+            f'<div class="login-logo">{logo_img(72)}</div>'
+            f'<div class="login-sub">Ingresá con tu correo y contraseña<br>de Rappi para ver tu cartera.</div>'
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+        email = st.text_input("Correo", placeholder="nombre.apellido@rappi.com")
+        password = st.text_input("Contraseña", type="password", placeholder="••••••••")
+        entrar = st.button("Entrar", type="primary", use_container_width=True)
+
+        if entrar:
+            if not email.strip() or not password:
+                st.warning("Completá correo y contraseña para continuar.")
+            elif not dl.check_password(email, password):
+                st.error("Correo o contraseña incorrectos.")
+            else:
+                st.session_state["logged_in"] = True
+                st.rerun()
+
+        st.markdown(
+            '<div class="login-foot">Eagle for Sales · acceso restringido</div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
+
+
+if not st.session_state.get("logged_in"):
+    render_login()
+    st.stop()
+
+st.markdown(build_css(), unsafe_allow_html=True)
 
 
 def encontrar_datos():
@@ -504,7 +550,7 @@ with col_sidebar:
         )
 
         st.session_state.setdefault("eagle_section", "leads")
-        NAV = [("leads", "🎯 Leads"), ("outreach", "📋 Outreach"), ("recuperaciones", "♻️ Recuperaciones")]
+        NAV = [("outreach", "📋 Outreach"), ("leads", "🎯 Leads"), ("recuperaciones", "♻️ Second Chance")]
         for sec_key, sec_label in NAV:
             if st.button(sec_label, key=f"nav_{sec_key}", use_container_width=True):
                 st.session_state["eagle_section"] = sec_key
@@ -539,8 +585,15 @@ with col_sidebar:
 
         st.markdown('<div class="logout-anchor">', unsafe_allow_html=True)
         if st.button("↺ Reiniciar universo del mes", use_container_width=True):
+            # OJO: se preserva "logged_in" a propósito -- antes de
+            # agregar el login, este botón limpiaba TODO session_state
+            # sin distinción; con el login ya activo, eso hubiera cerrado
+            # la sesión como efecto secundario no pedido de un botón que
+            # solo debería tocar el universo acumulado.
+            logueado = st.session_state.get("logged_in")
             for k in list(st.session_state.keys()):
                 st.session_state.pop(k, None)
+            st.session_state["logged_in"] = logueado
             # El botón viejo solo limpiaba session_state -- NO tocaba
             # estos archivos, que son justo donde vivía la contaminación
             # real. Ahora sí se borran los dos.
@@ -551,6 +604,10 @@ with col_sidebar:
             st.cache_data.clear()
             st.rerun()
         st.caption("Borra el universo acumulado de Ads/MD y vuelve a construirlo desde cero con el archivo de hoy.")
+
+        if st.button("🚪 Cerrar sesión", use_container_width=True):
+            st.session_state["logged_in"] = False
+            st.rerun()
         st.markdown("</div>", unsafe_allow_html=True)
 
 col_main.__enter__()
@@ -650,7 +707,7 @@ elif seccion_activa == "outreach":
         tabla_outreach(outreach["churn"], "Churn")
 
 else:  # seccion_activa == "recuperaciones"
-    header(dl.farmer_display(am), "Recuperaciones")
+    header(dl.farmer_display(am), "Second Chance")
 
     # Solo Ads y MD -- pedido explícito de Sabas: "Churn no".
     gmv_map_rec = dl.gmv_lookup(hojas["md"])

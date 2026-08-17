@@ -30,6 +30,21 @@ import streamlit as st
 
 AM_UNICO = "(único)"
 
+# ── LOGIN ── App de un solo usuario, credenciales fijas (pedido explícito
+# de Sabas) -- a diferencia de Wingman, que valida contra una lista de
+# Farmers activos y deriva la clave del correo, acá no hace falta nada
+# de eso: un solo email, una sola clave, las dos fijas.
+LOGIN_EMAIL = "sabas.ramirez@rappi.com"
+LOGIN_PASSWORD = "eagle.sabas"
+
+
+def check_password(email, password):
+    """Identificación con correo + contraseña fijos -- no es
+    autenticación fuerte (sin hash, sin límite de intentos), es una
+    barrera de "por seguridad de datos" ante quien no tenga el link
+    directo, mismo espíritu que ya usa Wingman con su propio login."""
+    return str(email).strip().lower() == LOGIN_EMAIL and str(password) == LOGIN_PASSWORD
+
 SHEET_ALIASES = {
     "productivity": "productivity",
     "checkout": "checkout",

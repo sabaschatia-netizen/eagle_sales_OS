@@ -153,8 +153,12 @@ def favicon():
     return "🦅"
 
 
-def build_css():
+def build_css(login=False):
     C = COLORS
+    LOGIN_BG_CSS = (
+        f'[data-testid="stAppViewContainer"] {{ background: {C["violeta"]} !important; }}'
+        if login else ""
+    )
     return f"""
     <style>
     @import url('{GOOGLE_FONTS_URL}');
@@ -375,5 +379,36 @@ def build_css():
     .eagle-sub {{ font-size: 12px; color: {C['muted']}; margin-top: 3px; }}
 
     hr {{ border-color: {C['line']}; }}
+
+    /* ── PANTALLA DE LOGIN ── */
+    /* Fondo violeta sólido (pedido explícito de Sabas) -- solo se activa
+       cuando build_css(login=True), ver más abajo. Nada de trucos de
+       CSS avanzado (:has() con marcador de hermano) -- eso depende de
+       una estructura de DOM que no está garantizada dentro del iframe
+       de Streamlit; un flag explícito en Python es 100% confiable. */
+    {LOGIN_BG_CSS}
+    .login-logo {{ display: flex; justify-content: center; margin-bottom: 18px; }}
+    .login-title {{ font-size: 26px; font-weight: 800; color: {C['white']};
+        letter-spacing: -0.6px; margin-bottom: 6px; text-align: center; }}
+    .login-sub {{ font-size: 13px; color: rgba(255,255,255,0.75); line-height: 1.55;
+        margin-bottom: 4px; text-align: center; }}
+    .login-foot {{ font-size: 11.5px; color: rgba(255,255,255,0.55); margin-top: 18px;
+        line-height: 1.5; text-align: center; }}
+    /* Inputs y botón sobre fondo violeta -- mismo criterio que ya usa el
+       sidebar (fondo translúcido blanco, no blanco sólido) para no
+       competir visualmente con el logo. */
+    .login-box .stTextInput input {{
+        background: rgba(255,255,255,0.14) !important; color: {C['white']} !important;
+        border: 1px solid rgba(255,255,255,0.30) !important; border-radius: 8px !important;
+    }}
+    .login-box .stTextInput label {{ color: {C['white']} !important; }}
+    .login-box .stButton button {{
+        background: {C['white']} !important; color: {C['violeta']} !important;
+        border: none !important; font-weight: 700 !important;
+    }}
+    .login-box .stButton button:hover {{ background: {C['crema']} !important; }}
+    .login-box [data-testid="stAlert"] {{
+        background: rgba(255,255,255,0.14) !important; color: {C['white']} !important;
+    }}
     </style>
     """
