@@ -165,7 +165,7 @@ def build_css(login=False):
     * {{ font-family: 'Poppins', sans-serif; }}
 
     [data-testid="stAppViewContainer"] {{ background: {C['bg']}; }}
-    [data-testid="stHeader"] {{ background: transparent; }}
+    [data-testid="stHeader"] {{ display: none !important; height: 0 !important; }}
 
     /* ── SIDEBAR FIJO ── */
     div[data-testid="stColumn"]:has(.st-key-eagle-sidebar) {{
