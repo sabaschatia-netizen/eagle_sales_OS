@@ -656,13 +656,10 @@ def tabla_outreach(df, titulo):
         st.markdown('<div class="tbl-box"></div>', unsafe_allow_html=True)
         return
     cols_estado = [c for c in dl.OUTREACH_COLUMNS[1:] if c in df.columns]
-    # El <th> usa el nombre de PANTALLA (dl.OUTREACH_HEADERS_DISPLAY) --
-    # `cols_estado` sigue siendo el nombre REAL de columna del Excel, y
-    # es lo que se usa para leer cada celda (`r.get(c)` más abajo), así
-    # que el rename es puramente visual, no afecta qué dato se muestra.
-    header = "<th>Brand</th>" + "".join(
-        f"<th>{dl.OUTREACH_HEADERS_DISPLAY.get(c, c)}</th>" for c in cols_estado
-    )
+    # El Excel ya trae el nombre final de cada columna (Sabas las
+    # renombró en la fuente) -- no hace falta ninguna traducción acá,
+    # a diferencia de antes.
+    header = "<th>Brand</th>" + "".join(f"<th>{c}</th>" for c in cols_estado)
     filas = []
     for _, r in df.iterrows():
         celdas = f"<td>{r['Brand']}</td>"

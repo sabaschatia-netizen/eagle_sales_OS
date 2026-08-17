@@ -55,25 +55,58 @@ SHEET_ALIASES = {
 
 OUTREACH_COLUMNS = [
     "Brand", "Primer WhatsApp", "Primera Llamada", "Segundo WhatsApp",
-    "Segunda Llamada", "Correo Personalizado", "Tercer Llamada",
-    "Tercer WhatsApp", "Cuarta Llamada",
+    "Segunda Llamada", "Tercer WhatsApp", "Tercera Llamada",
+    "Cuarto WhatsApp", "Cuarta Llamada",
 ]
 
-# Etiquetas de PANTALLA para las columnas de Outreach -- separadas del
-# nombre real de columna del Excel (OUTREACH_COLUMNS, arriba). Pedido
-# explícito de Sabas: renombrar "Correo Personalizado" -> "Tercer
-# WhatsApp", "Tercer Llamada" -> "Tercera Llamada", y el "Tercer
-# WhatsApp" que ya existía -> "Cuarto WhatsApp". Los nombres REALES de
-# columna en el Excel de Sabas (los 8 tabs de Outreach ya cargados) NO
-# se tocan -- son los que usa la detección de hoja por estructura
-# (`list(probe.columns) == OUTREACH_COLUMNS`, ver load_outreach) y los
-# que hay que leer para no perder ninguna columna con datos ya
-# cargados. Solo cambia lo que se ve en la tabla.
-OUTREACH_HEADERS_DISPLAY = {
+# BUG REAL ENCONTRADO (agosto 2026): Sabas renombró las columnas directo
+# en el Excel ("Correo Personalizado" -> "Tercer WhatsApp", "Tercer
+# Llamada" -> "Tercera Llamada", "Tercer WhatsApp" viejo -> "Cuarto
+# WhatsApp"), pero solo en la hoja OUTREACH ADS -- OUTREACH MD y la hoja
+# de Churn ("Hoja 10") siguen con los nombres viejos. Con
+# OUTREACH_COLUMNS fijo a un solo set de nombres, cualquiera de las
+# hojas que no coincida pierde esas 2 columnas (antes le pasó a Ads,
+# ahora le tocaba a MD/Churn) -- el problema no es "cuál nombre elegir",
+# es que el propio archivo NO es consistente entre sus propias pestañas.
+# FIX real: un mapa de sinónimos que normaliza CUALQUIER hoja al set de
+# nombres nuevos al leerla, sin importar cuál de las dos variantes
+# trae. Funciona sin tocar código de nuevo si el resto de las hojas se
+# renombran más adelante, o si alguna queda sin renombrar para siempre.
+OUTREACH_SINONIMOS = {
     "Correo Personalizado": "Tercer WhatsApp",
     "Tercer Llamada": "Tercera Llamada",
-    "Tercer WhatsApp": "Cuarto WhatsApp",
 }
+# El "Tercer WhatsApp" viejo (4to contacto) y el nuevo "Tercer WhatsApp"
+# (3er contacto, antes "Correo Personalizado") son AMBIGUOS por nombre
+# solo -- no se puede saber cuál es cuál mirando una columna aislada.
+# Se resuelve por POSICIÓN: en las hojas viejas, "Tercer WhatsApp"
+# siempre es la 8va columna (índice 7, el 4to contacto real) -- se
+# renombra a "Cuarto WhatsApp" solo si en esa misma hoja ya existe una
+# columna "Correo Personalizado" (la marca inequívoca de que es la
+# variante vieja).
+
+
+def _normalizar_columnas_outreach(df):
+    """Devuelve `df` con las columnas de Outreach en los nombres NUEVOS,
+    sin importar si la hoja original traía los viejos, los nuevos, o
+    (transición) una mezcla entre hojas del mismo archivo.
+
+    BUG REAL ENCONTRADO Y CORREGIDO: el guard `if df.empty: return df`
+    cortaba ANTES de renombrar -- pero `.empty` es True para cualquier
+    DataFrame de 0 filas, incluso uno que sí tiene columnas (como el
+    `probe` de 0 filas que usa la detección de la hoja de Churn). El
+    resultado era que la detección estructural de esa hoja nunca veía
+    los nombres normalizados y no la encontraba nunca -- Churn quedaba
+    en 0 filas aunque los datos reales sí estuvieran en el Excel. Ahora
+    se chequea la ausencia de columnas, no la ausencia de filas.
+    """
+    if len(df.columns) == 0:
+        return df
+    es_variante_vieja = "Correo Personalizado" in df.columns
+    renombres = dict(OUTREACH_SINONIMOS)
+    if es_variante_vieja and "Tercer WhatsApp" in df.columns:
+        renombres["Tercer WhatsApp"] = "Cuarto WhatsApp"
+    return df.rename(columns=renombres) if renombres else df
 OUTREACH_ESTADOS = ["No necesario", "No contactado", "Rechazado", "Entró a Pipeline", "Cerrado"]
 
 
@@ -120,7 +153,10 @@ def load_outreach(file_like_or_path):
                 continue
             try:
                 probe = pd.read_excel(xls, sheet_name=name, nrows=0)
-                if list(probe.columns) == OUTREACH_COLUMNS:
+                probe_norm = _normalizar_columnas_outreach(
+                    pd.DataFrame(columns=probe.columns)
+                )
+                if list(probe_norm.columns) == OUTREACH_COLUMNS:
                     encontradas["churn"] = name
                     usadas.add(name)
                     break
@@ -130,6 +166,7 @@ def load_outreach(file_like_or_path):
     out = {}
     for key, sheet_name in encontradas.items():
         df = pd.read_excel(xls, sheet_name=sheet_name) if sheet_name else pd.DataFrame(columns=OUTREACH_COLUMNS)
+        df = _normalizar_columnas_outreach(df)
         # Cada hoja de Outreach trae una leyenda pegada abajo de los
         # datos reales (mismo archivo que arma esta app -- filas vacías
         # + "Leyenda" + 3 líneas de texto explicativo). Sin filtrarla,
