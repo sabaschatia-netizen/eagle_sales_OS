@@ -38,33 +38,41 @@ DATA_PATH = os.path.join("data", "CRUCE_PRO_SALES.xlsx")
 
 def render_login():
     st.markdown(build_css(login=True), unsafe_allow_html=True)
-    _, mid, _ = st.columns([1, 1.15, 1])
+    _, mid, _ = st.columns([0.4, 5.2, 0.4])
     with mid:
         st.markdown('<div class="login-box">', unsafe_allow_html=True)
-        st.markdown(
-            f'<div style="text-align:center;padding-top:8vh;">'
-            f'<div class="login-logo">{logo_img(198)}</div>'
-            f'<div class="login-sub">Ingresá con tu correo y contraseña<br>de Rappi para ver tu cartera.</div>'
-            f"</div>",
-            unsafe_allow_html=True,
-        )
-        email = st.text_input("Correo", placeholder="nombre.apellido@rappi.com")
-        password = st.text_input("Contraseña", type="password", placeholder="••••••••")
-        entrar = st.button("Entrar", type="primary", use_container_width=True)
+        col_logo, col_form = st.columns([1.15, 1], gap="large")
 
-        if entrar:
-            if not email.strip() or not password:
-                st.warning("Completá correo y contraseña para continuar.")
-            elif not dl.check_password(email, password):
-                st.error("Correo o contraseña incorrectos.")
-            else:
-                st.session_state["logged_in"] = True
-                st.rerun()
+        with col_logo:
+            st.markdown(
+                f'<div style="padding-top:14vh;">'
+                f'<div class="login-logo">{logo_img(320)}</div>'
+                f'<div class="login-sub">Ingresá con tu correo y contraseña<br>de Rappi para ver tu cartera.</div>'
+                f"</div>",
+                unsafe_allow_html=True,
+            )
 
-        st.markdown(
-            '<div class="login-foot">Eagle for Sales · acceso restringido</div>',
-            unsafe_allow_html=True,
-        )
+        with col_form:
+            st.markdown('<div style="padding-top:22vh;">', unsafe_allow_html=True)
+            email = st.text_input("Correo", placeholder="nombre.apellido@rappi.com")
+            password = st.text_input("Contraseña", type="password", placeholder="••••••••")
+            entrar = st.button("Entrar", type="primary", use_container_width=True)
+
+            if entrar:
+                if not email.strip() or not password:
+                    st.warning("Completá correo y contraseña para continuar.")
+                elif not dl.check_password(email, password):
+                    st.error("Correo o contraseña incorrectos.")
+                else:
+                    st.session_state["logged_in"] = True
+                    st.rerun()
+
+            st.markdown(
+                '<div class="login-foot">Eagle for Sales · acceso restringido</div>',
+                unsafe_allow_html=True,
+            )
+            st.markdown("</div>", unsafe_allow_html=True)
+
         st.markdown("</div>", unsafe_allow_html=True)
 
 
