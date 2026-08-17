@@ -114,6 +114,161 @@ def load_outreach(file_like_or_path):
     return out
 
 
+RECUPERADAS_COLUMNS = ["Brand", "Propuesta reformulada", "Status"]
+
+
+@st.cache_data(ttl="10m", show_spinner=False)
+def load_recuperadas(file_like_or_path):
+    """
+    Carga las 2 hojas de Recuperaciones (Ads/MD) -- mismo patrón que
+    load_outreach: las genera esta app como plantilla, se editan a mano
+    afuera, se leen tal cual vuelvan. Búsqueda por nombre ("RECUPERADAS"
+    + "ADS"/"MD") -- esta vez el archivo real sí trae nombres
+    identificables ("RECUPERADAS ads", "RECUPERADAS MD"), a diferencia de
+    la hoja de Churn de Outreach que no tenía nombre -- igual se deja un
+    fallback estructural por si en algún momento se rompe la convención
+    de nombre, mismo criterio defensivo que ya se aplicó ahí.
+
+    Filtra la leyenda pegada al final (mismo mecanismo que
+    load_outreach). Hoja faltante = DataFrame vacío, nunca revienta.
+    """
+    xls = pd.ExcelFile(file_like_or_path)
+    encontradas = {"ads": None, "md": None}
+    usadas = set()
+
+    for name in xls.sheet_names:
+        upper = name.strip().upper()
+        if "RECUPERAD" not in upper:
+            continue
+        if "ADS" in upper:
+            encontradas["ads"] = name
+            usadas.add(name)
+        elif "MD" in upper or "MARKDOWN" in upper:
+            encontradas["md"] = name
+            usadas.add(name)
+
+    for key in ("ads", "md"):
+        if encontradas[key] is not None:
+            continue
+        for name in xls.sheet_names:
+            if name in usadas:
+                continue
+            try:
+                probe = pd.read_excel(xls, sheet_name=name, nrows=0)
+                if list(probe.columns) == RECUPERADAS_COLUMNS:
+                    encontradas[key] = name
+                    usadas.add(name)
+                    break
+            except (ValueError, KeyError):
+                continue
+
+    out = {}
+    for key, sheet_name in encontradas.items():
+        df = pd.read_excel(xls, sheet_name=sheet_name) if sheet_name else pd.DataFrame(columns=RECUPERADAS_COLUMNS)
+        if not df.empty:
+            # Fila real = tiene Brand Y (Propuesta reformulada o Status
+            # con algo) -- la leyenda solo tiene texto en la columna A.
+            valido = df["Propuesta reformulada"].notna() | df["Status"].notna()
+            df = df[df["Brand"].notna() & valido].reset_index(drop=True)
+            # tabla_lateral() (la misma que ya usa Leads) espera "Brand
+            # ID" y "Brand Name" separados, no un solo texto "Brand" --
+            # se separa acá para reusarla tal cual, sin duplicar el
+            # renderizado de tabla para esta sección nueva.
+            df["Brand ID"] = df["Brand"].apply(_brand_key)
+            df["Brand Name"] = df["Brand"]
+        out[key] = df
+    return out
+
+
+def funnel_recuperadas_niveles(df, gmv_map=None):
+    """
+    3 niveles de Recuperaciones -- pedido explícito de Sabas, con 2
+    lecturas de su spec que quedan documentadas acá por si hay que
+    corregirlas:
+
+      DECISIÓN 1: "barra interna: Propuesta reformulada y Sin gestionar"
+      del bloque 1 se lee como: Reformulada (Propuesta reformulada="Si")
+      vs. Sin Gestionar (="No" o vacío) -- el bloque en sí YA es
+      "Rechazadas" (universo completo de la hoja), la barra no repite
+      ese nombre como segmento.
+
+      DECISIÓN 2: la spec nombra "Rechazo definitivo" como destino de la
+      NO-recuperación, pero el Excel real solo tiene 3 valores posibles
+      en Status: Pipeline / Cerrado / Perdida. Se lee "Perdida" =
+      "Rechazo definitivo" (mismo concepto, otro nombre) -- no hay un
+      cuarto valor en los datos que pueda ser distinto a estos 2.
+
+    Nivel 1 -- Rechazadas = Reformulada + Sin Gestionar (universo entero
+      de la hoja).
+    Nivel 2 -- Reformulada = Recuperadas (Status en Pipeline/Cerrado) +
+      Rechazo definitivo (Status = Perdida).
+    Nivel 3 -- Recuperadas = Pipeline + Cerrada.
+
+    gmv_map (nuevo): la hoja de Recuperadas no trae GMV -- se pega desde
+    dl.gmv_lookup(), la misma fuente que ya usa Leads, cruzando por
+    Brand ID. Marca sin match = $0 (no revienta, no inventa un número).
+    """
+    gmv_map = gmv_map or {}
+    df = df.copy()
+    df["GMV"] = df["Brand ID"].apply(lambda k: gmv_map.get(k, 0.0))
+
+    reformulada = df["Propuesta reformulada"].astype(str).str.strip().str.lower() == "si"
+    sin_gestionar = ~reformulada
+
+    recuperada = df["Status"].isin(["Pipeline", "Cerrado"])
+    rechazo_def = df["Status"] == "Perdida"
+
+    n_reformulada = int(reformulada.sum())
+    n_sin_gestionar = int(sin_gestionar.sum())
+    n_recuperadas = int((reformulada & recuperada).sum())
+    n_rechazo_def = int((reformulada & rechazo_def).sum())
+    n_pipeline = int((reformulada & (df["Status"] == "Pipeline")).sum())
+    n_cerrada = int((reformulada & (df["Status"] == "Cerrado")).sum())
+
+    def segs(pares):
+        total = sum(n for _, n in pares) or 1
+        return [{"label": lab, "n": n, "pct": n / total * 100} for lab, n in pares]
+
+    def status_legible(row):
+        if not reformulada[row.name]:
+            return "Sin Gestionar"
+        if row["Status"] == "Perdida":
+            return "Rechazo definitivo"
+        if row["Status"] in ("Pipeline", "Cerrado"):
+            return row["Status"]
+        return "Reformulada"  # Si=Si pero Status todavía vacío (recién marcado)
+
+    df_status = df.copy()
+    df_status["Status_legible"] = df_status.apply(status_legible, axis=1)
+
+    rechazadas_tbl = df_status.assign(Status=df_status["Status_legible"].where(
+        df_status["Status_legible"] == "Sin Gestionar", "Reformulada"))
+    reformulada_tbl = df_status[reformulada].assign(
+        Status=lambda d: d["Status_legible"].where(d["Status_legible"] == "Rechazo definitivo", "Recuperada"))
+    recuperadas_tbl = df_status[reformulada & recuperada].assign(Status=df_status["Status_legible"])
+
+    return [
+        {
+            "key": "rechazadas", "titulo": "Rechazadas", "total": len(df),
+            "sub": "100%",
+            "segmentos": segs([("Reformulada", n_reformulada), ("Sin Gestionar", n_sin_gestionar)]),
+            "tabla": rechazadas_tbl,
+        },
+        {
+            "key": "reformulada", "titulo": "Reformulada", "total": n_reformulada,
+            "sub": f"{(n_reformulada / len(df) * 100) if len(df) else 0:.1f}% de Rechazadas",
+            "segmentos": segs([("Recuperada", n_recuperadas), ("Rechazo definitivo", n_rechazo_def)]),
+            "tabla": reformulada_tbl,
+        },
+        {
+            "key": "recuperadas", "titulo": "Recuperadas", "total": n_recuperadas,
+            "sub": f"{(n_recuperadas / len(df) * 100) if len(df) else 0:.1f}% de Rechazadas",
+            "segmentos": segs([("Pipeline", n_pipeline), ("Cerrada", n_cerrada)]),
+            "tabla": recuperadas_tbl,
+        },
+    ]
+
+
 @st.cache_data(ttl="10m", show_spinner=False)
 def _detectar_formato_pct(file_like_or_path, hoja, col_nombre):
     """

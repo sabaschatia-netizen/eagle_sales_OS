@@ -304,7 +304,7 @@ with col_sidebar:
         )
 
         st.session_state.setdefault("eagle_section", "leads")
-        NAV = [("leads", "🎯 Leads"), ("outreach", "📋 Outreach")]
+        NAV = [("leads", "🎯 Leads"), ("outreach", "📋 Outreach"), ("recuperaciones", "♻️ Recuperaciones")]
         for sec_key, sec_label in NAV:
             if st.button(sec_label, key=f"nav_{sec_key}", use_container_width=True):
                 st.session_state["eagle_section"] = sec_key
@@ -436,7 +436,7 @@ if seccion_activa == "leads":
         else:
             st.caption("Sin marcas en Prevention W1 o Churn para este Account Manager.")
 
-else:  # seccion_activa == "outreach"
+elif seccion_activa == "outreach":
     header(dl.farmer_display(am), "Outreach")
 
     outreach = dl.load_outreach(ruta_datos)
@@ -448,3 +448,22 @@ else:  # seccion_activa == "outreach"
         tabla_outreach(outreach["md"], "Markdown")
     with tab_o_churn:
         tabla_outreach(outreach["churn"], "Churn")
+
+else:  # seccion_activa == "recuperaciones"
+    header(dl.farmer_display(am), "Recuperaciones")
+
+    # Solo Ads y MD -- pedido explícito de Sabas: "Churn no".
+    gmv_map_rec = dl.gmv_lookup(hojas["md"])
+    recuperadas = dl.load_recuperadas(ruta_datos)
+
+    tab_r_ads, tab_r_md = st.tabs(["🚀 Ads", "🏷️ Markdown"])
+    with tab_r_ads:
+        if len(recuperadas["ads"]):
+            render_funnel(dl.funnel_recuperadas_niveles(recuperadas["ads"], gmv_map_rec), "rec_ads")
+        else:
+            st.caption("Sin marcas rechazadas de Ads para reformular.")
+    with tab_r_md:
+        if len(recuperadas["md"]):
+            render_funnel(dl.funnel_recuperadas_niveles(recuperadas["md"], gmv_map_rec), "rec_md")
+        else:
+            st.caption("Sin marcas rechazadas de MD para reformular.")

@@ -53,6 +53,11 @@ SEGMENT_COLORS = {
     "PW1":               {"bg": "#9885E0", "dark": False},
     "Churn":             {"bg": "#F4743C", "dark": False},
     "Retenido":          {"bg": "#CDF43D", "dark": True},
+    # Recuperaciones
+    "Reformulada":       {"bg": "#674FD3", "dark": False},
+    "Recuperada":        {"bg": "#CDF43D", "dark": True},
+    "Rechazo definitivo": {"bg": "#F4743C", "dark": False},
+    "Cerrada":           {"bg": "#CDF43D", "dark": True},
 }
 
 def _darken(hex_color, factor):
@@ -94,6 +99,11 @@ PILL_STYLES = {
     "PW1":                {"bg": _PVC, "fg": _PW},
     "Churn":              {"bg": _PCO, "fg": _PW},
     "Retenido":           {"bg": _PL,  "fg": _PW},
+    # Recuperaciones
+    "Reformulada":        {"bg": _PV,  "fg": _PW},
+    "Recuperada":         {"bg": _PL,  "fg": _PW},
+    "Rechazo definitivo": {"bg": _PCO, "fg": _PW},
+    "Cerrada":            {"bg": _PL,  "fg": _PW},
 
     # Canal de contacto (tabla Contactados) -- pedido explícito: Gmail
     # roja, WhatsApp verde, Llamada naranja.
