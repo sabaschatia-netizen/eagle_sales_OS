@@ -58,6 +58,22 @@ OUTREACH_COLUMNS = [
     "Segunda Llamada", "Correo Personalizado", "Tercer Llamada",
     "Tercer WhatsApp", "Cuarta Llamada",
 ]
+
+# Etiquetas de PANTALLA para las columnas de Outreach -- separadas del
+# nombre real de columna del Excel (OUTREACH_COLUMNS, arriba). Pedido
+# explícito de Sabas: renombrar "Correo Personalizado" -> "Tercer
+# WhatsApp", "Tercer Llamada" -> "Tercera Llamada", y el "Tercer
+# WhatsApp" que ya existía -> "Cuarto WhatsApp". Los nombres REALES de
+# columna en el Excel de Sabas (los 8 tabs de Outreach ya cargados) NO
+# se tocan -- son los que usa la detección de hoja por estructura
+# (`list(probe.columns) == OUTREACH_COLUMNS`, ver load_outreach) y los
+# que hay que leer para no perder ninguna columna con datos ya
+# cargados. Solo cambia lo que se ve en la tabla.
+OUTREACH_HEADERS_DISPLAY = {
+    "Correo Personalizado": "Tercer WhatsApp",
+    "Tercer Llamada": "Tercera Llamada",
+    "Tercer WhatsApp": "Cuarto WhatsApp",
+}
 OUTREACH_ESTADOS = ["No necesario", "No contactado", "Rechazado", "Entró a Pipeline", "Cerrado"]
 
 
@@ -82,7 +98,7 @@ def load_outreach(file_like_or_path):
     Hoja faltante = DataFrame vacío con las columnas correctas, nunca
     revienta.
     """
-    xls = pd.ExcelFile(file_like_or_path)
+    xls = _parser(file_like_or_path)
     encontradas = {"ads": None, "md": None, "churn": None}
     usadas = set()
 
@@ -147,7 +163,7 @@ def load_recuperadas(file_like_or_path):
     Filtra la leyenda pegada al final (mismo mecanismo que
     load_outreach). Hoja faltante = DataFrame vacío, nunca revienta.
     """
-    xls = pd.ExcelFile(file_like_or_path)
+    xls = _parser(file_like_or_path)
     encontradas = {"ads": None, "md": None}
     usadas = set()
 
@@ -299,25 +315,89 @@ def _detectar_formato_pct(file_like_or_path, hoja, col_nombre):
     """
     try:
         import openpyxl
-        wb = openpyxl.load_workbook(file_like_or_path, data_only=True)
-        if hoja not in wb.sheetnames:
-            hoja_real = next((s for s in wb.sheetnames if s.strip().upper() == hoja.upper()), None)
-            if not hoja_real:
+        # OPTIMIZACIÓN DE VELOCIDAD (auditoría, agosto 2026): antes se
+        # abría con `load_workbook(data_only=True)`, que carga TODO el
+        # workbook (12 hojas, incluida %CVR con 8.136 filas) en memoria
+        # -- 885 ms medidos, el ítem individual más caro de toda la app,
+        # y todo eso para leer el formato de UNA columna de 140 filas.
+        # `read_only=True` lee la hoja en streaming: mismos formatos,
+        # 339 ms. Se cierra explícitamente para liberar el handle.
+        wb = openpyxl.load_workbook(file_like_or_path, data_only=True, read_only=True)
+        try:
+            if hoja not in wb.sheetnames:
+                hoja_real = next((s for s in wb.sheetnames if s.strip().upper() == hoja.upper()), None)
+                if not hoja_real:
+                    return []
+                hoja = hoja_real
+            ws = wb[hoja]
+            filas_iter = ws.iter_rows(min_row=1, max_row=1)
+            headers = [c.value for c in next(filas_iter, [])]
+            if col_nombre not in headers:
                 return []
-            hoja = hoja_real
-        ws = wb[hoja]
-        headers = [c.value for c in ws[1]]
-        if col_nombre not in headers:
-            return []
-        col_idx = headers.index(col_nombre) + 1
-        return [
-            "%" in (ws.cell(row=r, column=col_idx).number_format or "")
-            for r in range(2, ws.max_row + 1)
-        ]
+            col_idx = headers.index(col_nombre) + 1
+            # En modo read_only NO existe ws.cell(...) aleatorio: se
+            # recorre solo esa columna, que es justo lo que hace falta.
+            return [
+                "%" in (fila[0].number_format or "")
+                for fila in ws.iter_rows(min_row=2, min_col=col_idx, max_col=col_idx)
+            ]
+        finally:
+            wb.close()
     except Exception:
         return []
 
 
+@st.cache_resource(ttl="10m", show_spinner=False)
+def _abrir_workbook(ruta):
+    """
+    OPTIMIZACIÓN DE VELOCIDAD (auditoría, agosto 2026). El mismo archivo
+    se abría con `pd.ExcelFile(...)` en CINCO funciones distintas
+    (load_cruce, load_recommended_budgets, load_cvr, load_outreach,
+    load_recuperadas). Cada apertura vuelve a descomprimir y parsear el
+    XML del .xlsx entero: 328 ms medidos POR APERTURA, ~1,3 s tirados a
+    la basura en cada arranque.
+
+    Acá se abre UNA sola vez y se reparte el mismo parser. Se usa
+    `cache_resource` (no `cache_data`) porque un ExcelFile es un handle
+    abierto, no un dato serializable -- cache_data intentaría copiarlo y
+    fallaría. El TTL de 10 min acompaña al de las funciones que lo usan,
+    así el archivo se relee solo si de verdad cambió.
+
+    Solo aplica cuando la entrada es una RUTA (str/Path). Si llega un
+    file-like (por si algún día vuelve el uploader), se devuelve None y
+    cada función abre por su cuenta, exactamente como antes.
+    """
+    return pd.ExcelFile(ruta)
+
+
+def _parser(file_like_or_path):
+    """Devuelve un pd.ExcelFile reutilizable para esta entrada. Si algo
+    falla al cachear, cae a abrirlo directo -- nunca rompe la carga."""
+    if isinstance(file_like_or_path, pd.ExcelFile):
+        return file_like_or_path
+    if isinstance(file_like_or_path, (str, os.PathLike)):
+        try:
+            xls = _abrir_workbook(str(file_like_or_path))
+            # Chequeo de salud: un handle cacheado puede quedar
+            # inservible si el archivo se reemplaza en disco (redeploy)
+            # o si algo cerró el zip. OJO: mirar `xls.sheet_names` NO
+            # sirve como chequeo -- se probó y sigue respondiendo con la
+            # lista cacheada aunque el zip ya esté cerrado, y recién
+            # explota al leer datos de verdad. Por eso se hace una
+            # lectura real de 0 filas (2,8 ms medidos): es lo único que
+            # prueba de verdad que el handle sirve. Si falla, se limpia
+            # el caché y se reabre, en vez de propagar el error.
+            pd.read_excel(xls, sheet_name=xls.sheet_names[0], nrows=0)
+            return xls
+        except Exception:
+            try:
+                _abrir_workbook.clear()
+            except Exception:
+                pass
+    return pd.ExcelFile(file_like_or_path)
+
+
+@st.cache_data(ttl="10m", show_spinner=False)
 def load_cruce(file_like_or_path):
     """
     Carga el Excel de 5 hojas por NOMBRE (no por ancho -- el formato viejo
@@ -326,7 +406,7 @@ def load_cruce(file_like_or_path):
     Devuelve dict: {"productivity", "checkout", "ads", "churn", "md"} --
     hoja faltante = DataFrame vacío, no revienta.
     """
-    xls = pd.ExcelFile(file_like_or_path)
+    xls = _parser(file_like_or_path)
     lower_map = {name.strip().lower(): name for name in xls.sheet_names}
 
     hojas = {}
@@ -713,9 +793,29 @@ def _clasificar_marca(key, nombre, gmv, marca_prod, es_cierre, col_señal, hoy):
 
 
 def _construir_funnel(universo_keys, nombre_map, gmv_map, cierre_keys, prod_farmer, col_señal, hoy):
+    # OPTIMIZACIÓN DE VELOCIDAD (auditoría de rendimiento, agosto 2026).
+    # Antes: por CADA marca del universo (~120) se hacía
+    # `prod_farmer[prod_farmer["brand_key"] == key]`, o sea una máscara
+    # booleana + un `take` sobre las 55 columnas del DataFrame entero.
+    # Medido con cProfile: 27.051 llamadas a pyarrow.take, ~400 ms por
+    # funnel. Ahora se hace UN solo groupby por brand_key y se recorta
+    # de antemano a las 6 columnas que la clasificación realmente lee.
+    # El resultado es EXACTAMENTE el mismo (groupby preserva el orden de
+    # las filas dentro de cada grupo, igual que la máscara booleana).
+    cols_utiles = [c for c in ("brand_key", "¿Contactado?", col_señal, "Date",
+                               "Medio de Contacto", "Tipo Never Ads")
+                   if c in prod_farmer.columns]
+    prod_slim = prod_farmer[cols_utiles] if cols_utiles else prod_farmer
+
+    if "brand_key" in prod_slim.columns and not prod_slim.empty:
+        grupos = {k: g for k, g in prod_slim.groupby("brand_key", sort=False)}
+    else:
+        grupos = {}
+    vacio = prod_slim.iloc[0:0]
+
     filas = []
     for key in universo_keys:
-        marca_prod = prod_farmer[prod_farmer["brand_key"] == key]
+        marca_prod = grupos.get(key, vacio)
         n1, n2, n3, canal = _clasificar_marca(
             key, nombre_map.get(key, key), gmv_map.get(key, 0.0),
             marca_prod, key in cierre_keys, col_señal, hoy,
@@ -1031,7 +1131,7 @@ def load_recommended_budgets(file_like_or_path):
     hoja no existe o no calza el formato esperado, devuelve ([], [])
     -- nunca revienta la app."""
     try:
-        xls = pd.ExcelFile(file_like_or_path) if not isinstance(file_like_or_path, pd.ExcelFile) else file_like_or_path
+        xls = _parser(file_like_or_path)
         lower_map = {name.strip().lower(): name for name in xls.sheet_names}
         real_name = lower_map.get("recommended budgets")
         if not real_name:
@@ -1101,15 +1201,25 @@ def cvr_lookup(cvr_df):
     """Lee la hoja '%CVR' -- export crudo cuyo encabezado real
     (Métrica | Brand Name | Valor | vs LM) vive en la primera fila de
     datos, no en el header de pandas. Devuelve {nombre_normalizado:
-    %CVR} (ej. 0.1781 -> 17.81)."""
+    %CVR} (ej. 0.1781 -> 17.81).
+
+    OPTIMIZACIÓN DE VELOCIDAD (auditoría, agosto 2026): antes recorría
+    con `.iterrows()` las 8.135 filas de esta hoja -- el antipatrón
+    clásico de pandas, porque construye un objeto Series nuevo por cada
+    fila. Ahora se recorre con `zip` sobre las dos columnas ya
+    convertidas a listas nativas. El orden de recorrido es el mismo, así
+    que ante nombres repetidos gana el último igual que antes, y los
+    descartes (NaN / no convertible a float) son idénticos.
+    """
     d = cvr_df
     if d is None or d.empty or d.shape[1] < 3:
         return {}
     cols = list(d.columns)
     nombre_col, valor_col = cols[1], cols[2]
+    nombres = d[nombre_col].iloc[1:].tolist()
+    valores = d[valor_col].iloc[1:].tolist()
     out = {}
-    for _, row in d.iloc[1:].iterrows():
-        nombre, valor = row.get(nombre_col), row.get(valor_col)
+    for nombre, valor in zip(nombres, valores):
         if pd.isna(nombre) or pd.isna(valor):
             continue
         try:
@@ -1124,7 +1234,7 @@ def load_cvr(file_like_or_path):
     """Lee la hoja '%CVR' del cruce por nombre (case-insensitive). Hoja
     ausente -> DataFrame vacío, no revienta."""
     try:
-        xls = pd.ExcelFile(file_like_or_path) if not isinstance(file_like_or_path, pd.ExcelFile) else file_like_or_path
+        xls = _parser(file_like_or_path)
         lower_map = {name.strip().lower(): name for name in xls.sheet_names}
         real_name = lower_map.get("%cvr")
         if not real_name:

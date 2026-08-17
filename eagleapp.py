@@ -479,9 +479,28 @@ def render_loading_watcher():
             if (!W.__egPendingNav) return;
             var now = Date.now();
             if (streamlitBusy()) {{ S.sawBusy = true; S.lastAct = now; return; }}
-            if (now - S.shownAt < 450) return;
-            if (now - S.lastAct < 650) return;
-            if (!S.sawBusy && now - S.shownAt < 5000) return;
+            // UMBRALES RECALIBRADOS (auditoría de rendimiento, agosto
+            // 2026). Los valores viejos (450 / 650 / 5000) se fijaron
+            // cuando cada clic tardaba ~1,35 s: con ese trabajo de
+            // fondo, el mínimo combinado de ~1,1 s de overlay quedaba
+            // escondido detrás del cómputo real y no se notaba.
+            // Tras las optimizaciones del data layer los clics bajaron a
+            // 0,2-0,4 s, así que ESE MÍNIMO pasó a ser el techo de
+            // velocidad percibida: el telón seguía tapando la pantalla
+            // ~0,7 s después de que la app ya había terminado. Se bajan
+            // de forma proporcional, conservando su función original:
+            //   160 ms  -> evita el "flash" de un overlay que aparece y
+            //              desaparece en el mismo frame.
+            //   260 ms  -> ventana de silencio del DOM; las mutaciones
+            //              de un rerun de Streamlit llegan en ráfagas
+            //              MUCHO más juntas que eso, así que sigue
+            //              siendo suficiente para no cortar antes de
+            //              tiempo.
+            //  2200 ms  -> red de seguridad si nunca se detectó el
+            //              indicador "busy" de Streamlit.
+            if (now - S.shownAt < 160) return;
+            if (now - S.lastAct < 260) return;
+            if (!S.sawBusy && now - S.shownAt < 2200) return;
             W.__egPendingNav = false;
             W.requestAnimationFrame(function() {{
               W.requestAnimationFrame(function() {{ W.setTimeout(removeOverlay, 60); }});
@@ -637,7 +656,13 @@ def tabla_outreach(df, titulo):
         st.markdown('<div class="tbl-box"></div>', unsafe_allow_html=True)
         return
     cols_estado = [c for c in dl.OUTREACH_COLUMNS[1:] if c in df.columns]
-    header = "<th>Brand</th>" + "".join(f"<th>{c}</th>" for c in cols_estado)
+    # El <th> usa el nombre de PANTALLA (dl.OUTREACH_HEADERS_DISPLAY) --
+    # `cols_estado` sigue siendo el nombre REAL de columna del Excel, y
+    # es lo que se usa para leer cada celda (`r.get(c)` más abajo), así
+    # que el rename es puramente visual, no afecta qué dato se muestra.
+    header = "<th>Brand</th>" + "".join(
+        f"<th>{dl.OUTREACH_HEADERS_DISPLAY.get(c, c)}</th>" for c in cols_estado
+    )
     filas = []
     for _, r in df.iterrows():
         celdas = f"<td>{r['Brand']}</td>"
