@@ -309,7 +309,12 @@ def render_loading_watcher():
     import json
 
     logo_js = json.dumps(EAGLE_LOGO_URI)
-    bg = COLORS["bg"]
+    # Fondo BLANCO puro, no COLORS["bg"] -- el logo de Eagle es violeta
+    # sólido sobre transparente (a diferencia del de Wingman, que es
+    # blanco sobre transparente y sí contrastaba contra su bg claro). Con
+    # el bg gris-violáceo de Eagle detrás, el violeta del logo casi
+    # desaparecía -- se ve en la captura real del bug que reportó Sabas.
+    bg = "#FFFFFF"
     txt = COLORS["muted"]
     track = COLORS["panel_2"]
 
