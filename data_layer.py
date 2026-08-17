@@ -799,6 +799,9 @@ def funnel_niveles(df):
         {
             "key": "cierre", "titulo": "Cierre", "total": n_cierre,
             "sub": f"{(n_cierre / len(df) * 100) if len(df) else 0:.1f}% de la base",
+            # win_rate = cerradas / contactadas (no sobre la base total) --
+            # pedido explícito de Sabas: "# cerradas / # contactadas".
+            "win_rate": (n_cierre / n_contactado * 100) if n_contactado else 0.0,
             "segmentos": [], "tabla": cierre_tbl,
         },
     ]

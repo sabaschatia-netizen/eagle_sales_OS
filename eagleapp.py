@@ -43,7 +43,7 @@ def render_login():
         st.markdown('<div class="login-box">', unsafe_allow_html=True)
         st.markdown(
             f'<div style="text-align:center;padding-top:8vh;">'
-            f'<div class="login-logo">{logo_img(180)}</div>'
+            f'<div class="login-logo">{logo_img(198)}</div>'
             f'<div class="login-sub">Ingresá con tu correo y contraseña<br>de Rappi para ver tu cartera.</div>'
             f"</div>",
             unsafe_allow_html=True,
@@ -174,6 +174,16 @@ def card_nivel(nivel, ancho, seleccionado, key):
     """
     barra = _barra_html(nivel["segmentos"])
     sel_cls = " is-sel" if seleccionado else ""
+    # Pill de win rate -- solo la trae el nivel "cierre" (ver
+    # funnel_niveles en data_layer.py). Reusa .eagle-badge, ya definida
+    # en theme.py, sin CSS nuevo.
+    win_rate_html = ""
+    if nivel.get("win_rate") is not None:
+        win_rate_html = (
+            f'<span class="eagle-badge" style="background:{COLORS["lima"]};'
+            f'color:{COLORS["text"]};margin-left:8px;">'
+            f'Win rate {nivel["win_rate"]:.1f}%</span>'
+        )
     with st.container(key=f"fncard_{key}"):
         st.markdown(
             f'<style>div[class*="st-key-fncard_{key}"] {{'
@@ -182,7 +192,7 @@ def card_nivel(nivel, ancho, seleccionado, key):
             f'<div class="fn-card{sel_cls}">'
             f'<div class="fn-title">{nivel["titulo"]}</div>'
             f'<div><span class="fn-total">{nivel["total"]}</span>'
-            f'<span class="fn-sub">{nivel["sub"]}</span></div>'
+            f'<span class="fn-sub">{nivel["sub"]}</span>{win_rate_html}</div>'
             f"{barra}</div>",
             unsafe_allow_html=True,
         )
