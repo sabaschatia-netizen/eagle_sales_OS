@@ -80,6 +80,7 @@ _PCO_ROJO = _darken(COLORS["coral"], 0.72)     # #F4743C -> #af522b (rojo)
 _PW = COLORS["white"]
 
 PILL_STYLES = {
+
     "Contactado":         {"bg": _PV,  "fg": _PW},
     "No Contactado":      {"bg": _PVC, "fg": _PW},
     "Sin Gestionar":      {"bg": _PC,  "fg": _PW},
@@ -105,6 +106,22 @@ PILL_STYLES = {
     "_investment":        {"bg": _PVC, "fg": _PW},
     "_closed":            {"bg": _PL,  "fg": _PW},
     "_default":           {"bg": COLORS["muted"], "fg": _PW},
+}
+
+# Pills de la sección Outreach -- DICCIONARIO APARTE de PILL_STYLES a
+# propósito: los mismos textos "Rechazado" y "Cerrado" ya existen en
+# PILL_STYLES con OTRO significado (estados del funnel de Leads) -- si
+# se mezclaran en el mismo dict, uno pisaría al otro. Colores pedidos
+# explícitos: gris / negro / rojo / morado / verde, mapeados 1 a 1 con
+# el texto EXACTO que trae la hoja de Excel (no se inventa ninguna
+# variante de mayúscula/tilde).
+OUTREACH_PILL_STYLES = {
+    "No necesario":      {"bg": COLORS["muted"], "fg": _PW},   # gris
+    "No contactado":     {"bg": COLORS["text"],  "fg": _PW},   # negro
+    "Rechazado":         {"bg": _PCO_ROJO,        "fg": _PW},  # rojo
+    "Entró a Pipeline":  {"bg": _PV,              "fg": _PW},  # morado (violeta de marca)
+    "Cerrado":           {"bg": _PL,              "fg": _PW},  # verde
+    "_default":          {"bg": COLORS["muted"],  "fg": _PW},
 }
 
 GOOGLE_FONTS_URL = "https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&display=swap"

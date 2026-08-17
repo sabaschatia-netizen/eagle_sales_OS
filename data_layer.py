@@ -38,6 +38,81 @@ SHEET_ALIASES = {
     "md": "md",
 }
 
+OUTREACH_COLUMNS = [
+    "Brand", "Primer WhatsApp", "Primera Llamada", "Segundo WhatsApp",
+    "Segunda Llamada", "Correo Personalizado", "Tercer Llamada",
+    "Tercer WhatsApp", "Cuarta Llamada",
+]
+OUTREACH_ESTADOS = ["No necesario", "No contactado", "Rechazado", "Entró a Pipeline", "Cerrado"]
+
+
+@st.cache_data(ttl="10m", show_spinner=False)
+def load_outreach(file_like_or_path):
+    """
+    Carga las 3 hojas de seguimiento de Outreach (Ads/MD/Churn) -- las
+    genera esta misma app como plantilla, pero se editan a mano fuera de
+    acá (Sabas les carga la tipificación en Excel/Sheets), así que hay
+    que leerlas tal cual vuelvan.
+
+    BÚSQUEDA DEFENSIVA para la hoja de Churn: "OUTREACH ADS" y
+    "OUTREACH MD" se encuentran por nombre sin drama, pero la de Churn
+    NO tiene ningún texto identificable en su nombre real -- en la
+    primera entrega de este archivo, la hoja de Churn se llamaba
+    literalmente "Hoja 10" (el nombre default que le puso Excel/Sheets,
+    nunca renombrada a mano). Por eso esa hoja se identifica por
+    ESTRUCTURA (mismas 9 columnas exactas de Outreach) entre las que
+    sobran después de ya haber apartado Ads y MD por nombre -- no
+    confiar en su nombre, porque no está garantizado.
+
+    Hoja faltante = DataFrame vacío con las columnas correctas, nunca
+    revienta.
+    """
+    xls = pd.ExcelFile(file_like_or_path)
+    encontradas = {"ads": None, "md": None, "churn": None}
+    usadas = set()
+
+    for name in xls.sheet_names:
+        upper = name.strip().upper()
+        if "OUTREACH" in upper and "CHURN" in upper:
+            encontradas["churn"] = name
+            usadas.add(name)
+        elif "OUTREACH" in upper and ("ADS" in upper or "NEVER" in upper):
+            encontradas["ads"] = name
+            usadas.add(name)
+        elif "OUTREACH" in upper and ("MARKDOWN" in upper or upper.endswith(" MD") or upper == "MD"):
+            encontradas["md"] = name
+            usadas.add(name)
+
+    if encontradas["churn"] is None:
+        for name in xls.sheet_names:
+            if name in usadas:
+                continue
+            try:
+                probe = pd.read_excel(xls, sheet_name=name, nrows=0)
+                if list(probe.columns) == OUTREACH_COLUMNS:
+                    encontradas["churn"] = name
+                    usadas.add(name)
+                    break
+            except (ValueError, KeyError):
+                continue
+
+    out = {}
+    for key, sheet_name in encontradas.items():
+        df = pd.read_excel(xls, sheet_name=sheet_name) if sheet_name else pd.DataFrame(columns=OUTREACH_COLUMNS)
+        # Cada hoja de Outreach trae una leyenda pegada abajo de los
+        # datos reales (mismo archivo que arma esta app -- filas vacías
+        # + "Leyenda" + 3 líneas de texto explicativo). Sin filtrarla,
+        # esas líneas llegan a la UI como si fueran marcas fantasma. Se
+        # descartan filas sin ningún valor válido de OUTREACH_ESTADOS en
+        # las columnas B-I -- una marca real siempre tiene "No
+        # necesario" como mínimo en todas, la leyenda nunca tiene nada.
+        if not df.empty:
+            cols_estado = [c for c in OUTREACH_COLUMNS[1:] if c in df.columns]
+            valido = df[cols_estado].isin(OUTREACH_ESTADOS).any(axis=1)
+            df = df[df["Brand"].notna() & valido].reset_index(drop=True)
+        out[key] = df
+    return out
+
 
 @st.cache_data(ttl="10m", show_spinner=False)
 def _detectar_formato_pct(file_like_or_path, hoja, col_nombre):

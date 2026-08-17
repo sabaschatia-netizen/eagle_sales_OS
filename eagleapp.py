@@ -20,7 +20,7 @@ import pandas as pd
 import streamlit as st
 
 import data_layer as dl
-from theme import COLORS, PILL_STYLES, SEGMENT_COLORS, build_css, favicon, logo_img
+from theme import COLORS, OUTREACH_PILL_STYLES, PILL_STYLES, SEGMENT_COLORS, build_css, favicon, logo_img
 
 st.set_page_config(page_title="Eagle", page_icon=favicon(), layout="wide", initial_sidebar_state="collapsed")
 st.markdown(build_css(), unsafe_allow_html=True)
@@ -304,10 +304,15 @@ with col_sidebar:
         )
 
         st.session_state.setdefault("eagle_section", "leads")
-        st.button("🎯 Leads", key="nav_leads", use_container_width=True)
+        NAV = [("leads", "🎯 Leads"), ("outreach", "📋 Outreach")]
+        for sec_key, sec_label in NAV:
+            if st.button(sec_label, key=f"nav_{sec_key}", use_container_width=True):
+                st.session_state["eagle_section"] = sec_key
+                st.rerun()
+        activo = f"nav_{st.session_state['eagle_section']}"
         st.markdown(
-            f"""<style>.st-key-nav_leads .stButton button,
-            .st-key-nav_leads .stButton button * {{
+            f"""<style>.st-key-{activo} .stButton button,
+            .st-key-{activo} .stButton button * {{
                 background: {COLORS["white"]} !important; color: {COLORS["violeta"]} !important;
                 border-color: {COLORS["white"]} !important; }}</style>""",
             unsafe_allow_html=True,
@@ -350,44 +355,96 @@ with col_sidebar:
 
 col_main.__enter__()
 
-header(dl.farmer_display(am), "Leads")
+seccion_activa = st.session_state.get("eagle_section", "leads")
 
-gmv_map = dl.gmv_lookup(hojas["md"])
-f_ads = dl.funnel_ads(hojas["ads"], productivity, checkout, am, gmv_map, dl.universo_mensual_path("ads"), hoy=hoy)
-f_md = dl.funnel_md(hojas["md"], productivity, checkout, am, gmv_map, dl.universo_mensual_path("md"), hoy=hoy)
-f_churn = dl.funnel_churn(hojas["churn"], productivity, am, gmv_map)
 
-# Inversión (Pipeline) y Cerrado (Cierre) -- rangos de RECOMMENDED
-# BUDGETS, %CVR por marca y % cerrado de Checkout.Presupuesto, todo
-# resuelto una sola vez acá y pasado como contexto a cada tabla.
-rangos_ads, rangos_md = dl.load_recommended_budgets(ruta_datos)
-cvr_map = dl.cvr_por_brand_key(hojas["md"], dl.load_cvr(ruta_datos))
-presupuesto_map = dl.presupuesto_valor_por_brand(checkout, am)
+def tabla_outreach(df, titulo):
+    """Tabla de solo lectura de una hoja de Outreach -- pedido explícito
+    de Sabas: "la tipificación solo se cambia en el Excel, no en Eagle,
+    solo debe mostrar la pill con su color pero no permitir cambiarla".
+    Por eso es HTML puro (mismo patrón que tabla_lateral en Leads), sin
+    ningún widget editable -- Streamlit no tiene forma de que un
+    st.dataframe muestre un color por celda Y sea de solo lectura al
+    mismo tiempo con esta granularidad, así que se arma a mano, igual
+    que ya se resolvió para las pills de Leads."""
+    st.caption(f"{len(df)} marca(s) — tal como están tipificadas en el Excel, sin editar acá.")
+    if not len(df):
+        st.markdown('<div class="tbl-box"></div>', unsafe_allow_html=True)
+        return
+    cols_estado = [c for c in dl.OUTREACH_COLUMNS[1:] if c in df.columns]
+    header = "<th>Brand</th>" + "".join(f"<th>{c}</th>" for c in cols_estado)
+    filas = []
+    for _, r in df.iterrows():
+        celdas = f"<td>{r['Brand']}</td>"
+        for c in cols_estado:
+            val = r.get(c)
+            est = OUTREACH_PILL_STYLES.get(val, OUTREACH_PILL_STYLES["_default"])
+            texto = val if pd.notna(val) else "—"
+            celdas += f'<td><span class="eagle-badge" style="background:{est["bg"]};color:{est["fg"]};">{texto}</span></td>'
+        filas.append(f"<tr>{celdas}</tr>")
+    ancho_brand = "20%"
+    ancho_resto = f"{(100 - 20) / max(len(cols_estado), 1):.1f}%"
+    colgroup = f'<col style="width:{ancho_brand}">' + "".join(f'<col style="width:{ancho_resto}">' for _ in cols_estado)
+    st.markdown(
+        '<div class="tbl-box" style="height:640px;">'
+        f'<table class="eagle-pill-table"><colgroup>{colgroup}</colgroup>'
+        f"<thead><tr>{header}</tr></thead><tbody>{''.join(filas)}</tbody></table></div>",
+        unsafe_allow_html=True,
+    )
 
-ctx_ads = {"tipo": "ads", "rangos_ads": rangos_ads, "rangos_md": rangos_md,
-           "cvr_map": cvr_map, "presupuesto_map": presupuesto_map}
-ctx_md = {"tipo": "md", "rangos_ads": rangos_ads, "rangos_md": rangos_md,
-          "cvr_map": cvr_map, "presupuesto_map": presupuesto_map}
 
-NOTA_LOOP = ("↻ Vence el bucket (>5 días hábiles con never-ads) → regresa a "
-             "<b>Contactados</b>, marcado como rechazado")
+if seccion_activa == "leads":
+    header(dl.farmer_display(am), "Leads")
 
-tab_ads, tab_md, tab_churn = st.tabs(["🚀 Ads (Never Ads)", "🏷️ Markdown", "⚠️ Churn"])
+    gmv_map = dl.gmv_lookup(hojas["md"])
+    f_ads = dl.funnel_ads(hojas["ads"], productivity, checkout, am, gmv_map, dl.universo_mensual_path("ads"), hoy=hoy)
+    f_md = dl.funnel_md(hojas["md"], productivity, checkout, am, gmv_map, dl.universo_mensual_path("md"), hoy=hoy)
+    f_churn = dl.funnel_churn(hojas["churn"], productivity, am, gmv_map)
 
-with tab_ads:
-    if len(f_ads):
-        render_funnel(dl.funnel_niveles(f_ads), "ads", NOTA_LOOP, ctx_ads)
-    else:
-        st.caption("Sin datos de ADS para calcular el universo.")
+    # Inversión (Pipeline) y Cerrado (Cierre) -- rangos de RECOMMENDED
+    # BUDGETS, %CVR por marca y % cerrado de Checkout.Presupuesto, todo
+    # resuelto una sola vez acá y pasado como contexto a cada tabla.
+    rangos_ads, rangos_md = dl.load_recommended_budgets(ruta_datos)
+    cvr_map = dl.cvr_por_brand_key(hojas["md"], dl.load_cvr(ruta_datos))
+    presupuesto_map = dl.presupuesto_valor_por_brand(checkout, am)
 
-with tab_md:
-    if len(f_md):
-        render_funnel(dl.funnel_niveles(f_md), "md", NOTA_LOOP, ctx_md)
-    else:
-        st.caption("Sin datos de MD para calcular el universo.")
+    ctx_ads = {"tipo": "ads", "rangos_ads": rangos_ads, "rangos_md": rangos_md,
+               "cvr_map": cvr_map, "presupuesto_map": presupuesto_map}
+    ctx_md = {"tipo": "md", "rangos_ads": rangos_ads, "rangos_md": rangos_md,
+              "cvr_map": cvr_map, "presupuesto_map": presupuesto_map}
 
-with tab_churn:
-    if len(f_churn):
-        render_funnel(dl.funnel_churn_niveles(f_churn), "churn")
-    else:
-        st.caption("Sin marcas en Prevention W1 o Churn para este Account Manager.")
+    NOTA_LOOP = ("↻ Vence el bucket (>5 días hábiles con never-ads) → regresa a "
+                 "<b>Contactados</b>, marcado como rechazado")
+
+    tab_ads, tab_md, tab_churn = st.tabs(["🚀 Ads (Never Ads)", "🏷️ Markdown", "⚠️ Churn"])
+
+    with tab_ads:
+        if len(f_ads):
+            render_funnel(dl.funnel_niveles(f_ads), "ads", NOTA_LOOP, ctx_ads)
+        else:
+            st.caption("Sin datos de ADS para calcular el universo.")
+
+    with tab_md:
+        if len(f_md):
+            render_funnel(dl.funnel_niveles(f_md), "md", NOTA_LOOP, ctx_md)
+        else:
+            st.caption("Sin datos de MD para calcular el universo.")
+
+    with tab_churn:
+        if len(f_churn):
+            render_funnel(dl.funnel_churn_niveles(f_churn), "churn")
+        else:
+            st.caption("Sin marcas en Prevention W1 o Churn para este Account Manager.")
+
+else:  # seccion_activa == "outreach"
+    header(dl.farmer_display(am), "Outreach")
+
+    outreach = dl.load_outreach(ruta_datos)
+
+    tab_o_ads, tab_o_md, tab_o_churn = st.tabs(["🚀 Ads", "🏷️ Markdown", "⚠️ Churn"])
+    with tab_o_ads:
+        tabla_outreach(outreach["ads"], "Ads")
+    with tab_o_md:
+        tabla_outreach(outreach["md"], "Markdown")
+    with tab_o_churn:
+        tabla_outreach(outreach["churn"], "Churn")
