@@ -141,6 +141,9 @@ def logo_img(width=64):
     return f'<img src="data:image/png;base64,{EAGLE_LOGO_B64}" width="{width}" style="display:block;">'
 
 
+EAGLE_LOGO_URI = "data:image/png;base64," + EAGLE_LOGO_B64
+
+
 def favicon():
     return "🦅"
 

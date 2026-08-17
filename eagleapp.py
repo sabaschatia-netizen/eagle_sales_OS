@@ -18,6 +18,7 @@ import os
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as st_components
 
 import data_layer as dl
 from theme import COLORS, OUTREACH_PILL_STYLES, PILL_STYLES, SEGMENT_COLORS, build_css, favicon, logo_img
@@ -266,7 +267,201 @@ def render_funnel(niveles, prefijo, nota_loop=None, ctx=None):
         tabla_lateral(actual["tabla"], actual["titulo"], actual["key"], ctx)
 
 
+def render_loading_watcher():
+    """
+    Telón de carga -- COPIADO EXACTO del mecanismo real y ya comprobado
+    de Wingman (render_loading_watcher() en wingmanapp.py), no
+    reinventado. Se adaptaron únicamente 4 puntos, todos específicos de
+    identidad/arquitectura de Eagle -- el resto de la lógica (arquitectura
+    de dos pasos con st.components.v1.html, MutationObserver, detección
+    de fin de carga por indicadores reales de Streamlit en el DOM, el
+    "left" calculado con getBoundingClientRect) es literal, sin cambios:
+
+      1) Prefijo de IDs/CSS/variables JS: "gw-"/"__gw" (Wingman) ->
+         "eg-"/"__eg" (Eagle) -- para que las dos apps puedan convivir en
+         el mismo navegador (dos pestañas abiertas) sin que una pise el
+         overlay o los listeners de la otra.
+      2) Selector del sidebar: ".st-key-wingman-sidebar" ->
+         ".st-key-eagle-sidebar" -- el nombre real de la key que usa
+         st.container(key=...) en el sidebar de Eagle (ver más abajo).
+      3) Logo: theme.LOGO_ICON_URI (ícono chico de Wingman, sin texto) ->
+         theme.EAGLE_LOGO_URI (Eagle solo tiene un logo, el lockup
+         completo con texto -- no existe una versión ícono-solo separada).
+      4) Color de acento de la barra de progreso: COLORS["brand_orange"]
+         (marca de Wingman) -> COLORS["violeta"] (marca de Eagle).
+
+    Por qué esta arquitectura y no algo más simple (documentado en el
+    original, se mantiene la explicación porque el motivo aplica igual
+    acá): st.markdown()+time.sleep()+st.rerun() manual no es confiable
+    porque Streamlit no garantiza CUÁNDO el navegador terminó de pintar
+    el frame anterior antes de que el siguiente rerun mute el DOM -- el
+    resultado observado era el overlay y el contenido nuevo visibles a
+    la vez, de forma persistente. Este mecanismo en cambio: se inyecta
+    en CADA rerun (sin condición), vive en window.parent (no en el
+    iframe aislado de components.html), aparece al instante del click
+    (desde el propio listener JS, sin esperar a que Python reciba el
+    evento), y se oculta recién cuando el JS detecta que Streamlit
+    realmente terminó (querySelectors de stStatusWidget/spinner/skeleton
+    + MutationObserver vigilando si el DOM sigue cambiando) -- nunca con
+    un tiempo fijo adivinado.
+    """
+    from theme import EAGLE_LOGO_URI
+    import json
+
+    logo_js = json.dumps(EAGLE_LOGO_URI)
+    bg = COLORS["bg"]
+    txt = COLORS["muted"]
+    track = COLORS["panel_2"]
+
+    st_components.html(
+        f"""
+        <script>
+        (function() {{
+          var W, D;
+          try {{ W = window.parent; D = W.document; }} catch (e) {{ return; }}
+          if (!D || !D.body) return;
+
+          try {{
+            var s = D.getElementById('eg-loading-style');
+            if (!s) {{ s = D.createElement('style'); s.id = 'eg-loading-style'; D.head.appendChild(s); }}
+            s.textContent = `
+              #eg-loading {{ position: fixed; z-index: 2147483200; display: flex;
+                align-items: center; justify-content: center; background: {bg};
+                font-family: 'Poppins', sans-serif; animation: eg-fade-in .12s ease-out; }}
+              #eg-loading .eg-box {{ display: flex; flex-direction: column; align-items: center; gap: 16px; }}
+              #eg-loading .eg-logo {{ height: 46px; width: auto; animation: eg-pulse 1.6s ease-in-out infinite; }}
+              #eg-loading .eg-txt {{ font-size: 15px; font-weight: 700; color: {txt}; }}
+              #eg-loading .eg-bar {{ width: 230px; height: 6px; border-radius: 999px; background: {track}; overflow: hidden; }}
+              #eg-loading .eg-bar-fill {{ height: 100%; width: 38%; border-radius: 999px;
+                background: {COLORS["violeta"]}; animation: eg-slide 1.1s ease-in-out infinite; }}
+              @keyframes eg-slide {{ 0% {{ transform: translateX(-130%); }} 100% {{ transform: translateX(360%); }} }}
+              @keyframes eg-fade-in {{ from {{ opacity: 0; }} to {{ opacity: 1; }} }}
+              @keyframes eg-pulse {{ 0%,100% {{ transform: scale(1); opacity: .92; }} 50% {{ transform: scale(1.06); opacity: 1; }} }}
+            `;
+          }} catch (e) {{}}
+
+          var LOGO = {logo_js};
+          var S = W.__egNavState = W.__egNavState || {{ sawBusy: false, shownAt: 0, lastAct: 0 }};
+
+          function buildOverlay(label) {{
+            var el = D.getElementById('eg-loading');
+            if (!el) {{ el = D.createElement('div'); el.id = 'eg-loading'; D.body.appendChild(el); }}
+            var safe = String(label == null ? '' : label)
+              .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+            el.innerHTML = '<div class="eg-box">' +
+              '<img class="eg-logo" src="' + LOGO + '" alt="Eagle"/>' +
+              '<div class="eg-txt">Cargando ' + safe + '…</div>' +
+              '<div class="eg-bar"><div class="eg-bar-fill"></div></div></div>';
+            el.style.display = 'flex';
+
+            var left = 0;
+            try {{
+              var sb = D.querySelector('.st-key-eagle-sidebar');
+              if (sb) {{
+                var r = sb.getBoundingClientRect();
+                if (r.width > 2 && r.right > 2 && r.right < 600) left = r.right;
+              }}
+            }} catch (e) {{}}
+            el.style.left = left + 'px';
+            el.style.top = '0px';
+            el.style.right = '0px';
+            el.style.bottom = '0px';
+
+            try {{ W.clearTimeout(W.__egLoadingKill); }} catch (e) {{}}
+            W.__egLoadingKill = W.setTimeout(removeOverlay, 25000);
+          }}
+
+          function removeOverlay() {{
+            var el = D.getElementById('eg-loading');
+            if (el) el.remove();
+            try {{ W.clearTimeout(W.__egLoadingKill); }} catch (e) {{}}
+            W.__egPendingNav = false;
+            S.sawBusy = false;
+          }}
+
+          function startNav(label) {{
+            W.__egPendingNav = true;
+            S.sawBusy = false;
+            S.shownAt = Date.now();
+            S.lastAct = S.shownAt;
+            buildOverlay(label);
+          }}
+
+          function onNavClick(ev) {{
+            try {{
+              var btn = ev.target && ev.target.closest ? ev.target.closest('button') : null;
+              if (!btn) return;
+              var sidebar = D.querySelector('.st-key-eagle-sidebar');
+              if (!sidebar || !sidebar.contains(btn)) return;
+              var testid = btn.getAttribute('data-testid') || '';
+              if (testid.indexOf('Sidebar') !== -1 || testid.indexOf('Collapse') !== -1) return;
+              var ariaLabel = (btn.getAttribute('aria-label') || '').toLowerCase();
+              if (ariaLabel.indexOf('sidebar') !== -1) return;
+              var label = ((btn.innerText || btn.textContent) || '').trim();
+              if (!label) return;
+              if (/^[a-z_]+$/.test(label) && label.indexOf('_') !== -1) return;
+              startNav(label.replace(/^[^\\w]+/, '').trim());
+            }} catch (e) {{}}
+          }}
+
+          function streamlitBusy() {{
+            try {{
+              if (D.querySelector('[data-testid="stStatusWidget"]')) return true;
+              if (D.querySelector('.stApp[data-test-script-state="running"]')) return true;
+              if (D.querySelector('[data-test-script-state="running"]')) return true;
+              if (D.querySelector('.stSpinner')) return true;
+              if (D.querySelector('[data-testid="stSkeleton"]')) return true;
+            }} catch (e) {{}}
+            return false;
+          }}
+
+          function navTick() {{
+            if (!W.__egPendingNav) return;
+            var now = Date.now();
+            if (streamlitBusy()) {{ S.sawBusy = true; S.lastAct = now; return; }}
+            if (now - S.shownAt < 450) return;
+            if (now - S.lastAct < 650) return;
+            if (!S.sawBusy && now - S.shownAt < 5000) return;
+            W.__egPendingNav = false;
+            W.requestAnimationFrame(function() {{
+              W.requestAnimationFrame(function() {{ W.setTimeout(removeOverlay, 60); }});
+            }});
+          }}
+
+          try {{
+            var old = W.__egNavHandlers;
+            if (old) {{ D.removeEventListener('click', old.click, true); }}
+          }} catch (e) {{}}
+          var H = {{ click: onNavClick }};
+          W.__egNavHandlers = H;
+          D.addEventListener('click', H.click, true);
+
+          try {{ if (W.__egNavMO) W.__egNavMO.disconnect(); }} catch (e) {{}}
+          try {{
+            var mo = new W.MutationObserver(function() {{
+              if (W.__egPendingNav) S.lastAct = Date.now();
+            }});
+            var root = D.querySelector('[data-testid="stAppViewContainer"]') ||
+                       D.querySelector('.stApp') || D.body;
+            mo.observe(root, {{ childList: true, subtree: true }});
+            W.__egNavMO = mo;
+          }} catch (e) {{}}
+
+          try {{ if (W.__egNavTick) W.clearInterval(W.__egNavTick); }} catch (e) {{}}
+          W.__egNavTick = W.setInterval(navTick, 80);
+        }})();
+        </script>
+        """,
+        height=0,
+    )
+
+
 # ── SIDEBAR ────────────────────────────────────────────────────
+# Telón de carga: se re-engancha en CADA ejecución del script -- mismo
+# punto relativo donde Wingman lo llama (justo antes de que arranque el
+# sidebar). Ver el docstring de render_loading_watcher() más arriba.
+render_loading_watcher()
+
 col_sidebar, col_main = st.columns([1, 5.2], gap="small")
 
 with col_sidebar:
